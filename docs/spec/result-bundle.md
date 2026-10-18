@@ -218,13 +218,15 @@ number of concurrent requests. The toolkit then ends the rep after a 30-second
 grace period.
 
 **Provider failures.** Retries happen only before any byte has reached the
-client and only when the provider cannot still be working on the request:
-connection and TLS failures, a connection closed without any response, and
-408, 429 and 5xx answers. They use exponential backoff, honouring
-`retry-after-ms` or `Retry-After` (seconds or an HTTP date), capped at 30
-seconds, up to `infra.upstream_retries` times. A timeout after the request was
-sent is not retried, because the provider may still be generating, and billing,
-an answer the gateway would never count.
+client and only when the provider cannot be working on the request: connection
+and TLS failures before the request was fully sent (the provider never held a
+complete request), and 408, 429 and 5xx answers. They use exponential backoff,
+honouring `retry-after-ms` or `Retry-After` (seconds or an HTTP date), capped at
+30 seconds, up to `infra.upstream_retries` times. Once the request was fully
+sent, nothing is retried, because the provider may already be generating, and
+billing, an answer the gateway would never count; a retry could bill twice while
+the record shows one call. A timeout is then `usage_unknown`, and a connection
+that fails or closes before any response is a void.
 
 **Void attempts are a re-roll, so only provider-side and setup failures void.**
 A void re-runs the rep. If anything that depends only on the harness's own
@@ -232,6 +234,7 @@ behaviour could void, a harness could re-roll reps that were going badly. The
 attempt becomes void, recorded as `upstream_failed`, when:
 
 - retries run out;
+- the connection fails or closes after the request was fully sent and before any response (it is not retried, see above);
 - the provider answers with any status other than 200, 400, 413, 422 or a retryable one — 401, 403 and 404 mean the key, model id or base URL is wrong, which is a setup fault, not a harness result;
 - a stream breaks off (the connection fails or closes early; a read timeout is `usage_unknown` instead), or a response carries no usage the gateway can count;
 - the gateway itself faults after admitting a request;
