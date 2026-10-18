@@ -1,0 +1,12 @@
+diff --git a/pager.py b/pager.py
+--- a/pager.py
++++ b/pager.py
+@@ -7,7 +7,7 @@
+         raise ValueError("size must be >= 1")
+     if number < 1:
+         raise ValueError("number must be >= 1")
+-    start = number * size
++    start = (number - 1) * size
+     return items[start:start + size]
+ 
+ 

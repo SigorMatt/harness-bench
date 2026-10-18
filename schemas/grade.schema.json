@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:grade:1",
+  "title": "Grade (reps/<n>/grade.json)",
+  "description": "Inside a bundle this is advisory: it lets the submitter see results before submitting. The aggregator re-grades every rep from the patch and writes its own grade with the same schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "task_id", "rep", "grader_image", "resolved", "target", "preservation", "scope", "normalization", "diff"],
+  "properties": {
+    "schema": {
+      "const": "hb/grade/1"
+    },
+    "task_id": {
+      "$ref": "urn:hb:schema:common:1#/$defs/slug"
+    },
+    "rep": {
+      "$ref": "urn:hb:schema:common:1#/$defs/reps"
+    },
+    "grader_image": {
+      "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
+    },
+    "resolved": {
+      "description": "All target and preservation checks passed, and no out-of-scope edits if the task's scope is strict.",
+      "type": "boolean"
+    },
+    "target": {
+      "$ref": "urn:hb:schema:common:1#/$defs/counts"
+    },
+    "preservation": {
+      "$ref": "urn:hb:schema:common:1#/$defs/counts"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["strict", "out_of_scope_files"],
+      "properties": {
+        "strict": {
+          "type": "boolean"
+        },
+        "out_of_scope_files": {
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        }
+      }
+    },
+    "normalization": {
+      "description": "What the grader changed before probing. Reported as data; it does not affect the verdict.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protected_restored"],
+      "properties": {
+        "protected_restored": {
+          "description": "Protected paths the patch had changed, restored from pristine.",
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        }
+      }
+    },
+    "diff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files_changed", "lines_added", "lines_removed"],
+      "properties": {
+        "files_changed": {
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        },
+        "lines_added": {
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        },
+        "lines_removed": {
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        }
+      }
+    }
+  }
+}

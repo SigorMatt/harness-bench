@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:registry:1",
+  "title": "Harness registry",
+  "description": "Curated list of benchmarkable harnesses. Baked into the toolkit image, so a caller can only choose among entries that exist at the release. Adding a harness is a pull request.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "harnesses"],
+  "properties": {
+    "schema": {
+      "const": "hb/registry/1"
+    },
+    "harnesses": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "image", "config_digest", "entrypoint", "homepage"],
+        "properties": {
+          "id": {
+            "$ref": "urn:hb:schema:common:1#/$defs/slug"
+          },
+          "version": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._+-]{1,64}$"
+          },
+          "image": {
+            "description": "Adapter image: the harness at a pinned version plus a thin entrypoint that implements the adapter contract.",
+            "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
+          },
+          "config_digest": {
+            "description": "Digest of the stock configuration the adapter writes (provider settings only).",
+            "$ref": "urn:hb:schema:common:1#/$defs/digest"
+          },
+          "entrypoint": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^[\\x21-\\x7e]+$"
+            }
+          },
+          "homepage": {
+            "type": "string",
+            "pattern": "^https://[\\x21-\\x7e]+$"
+          }
+        }
+      }
+    }
+  }
+}

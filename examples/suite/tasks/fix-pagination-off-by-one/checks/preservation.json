@@ -1,0 +1,7 @@
+{
+  "p1": {"ok": 0},
+  "p2": {"ok": 3},
+  "p3": {"error": "ValueError"},
+  "p4": {"error": "ValueError"},
+  "p5": {"ok": []}
+}

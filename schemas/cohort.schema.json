@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:cohort:1",
+  "title": "Cohort key",
+  "description": "Everything that must be equal for two results to be compared. Derived from suite.json and the suite tree digest; never written by hand. cohort_id = content_id(cohort). Results are never ranked across cohorts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "suite", "model", "runtime", "budget", "track", "reps"],
+  "properties": {
+    "schema": {
+      "const": "hb/cohort/1"
+    },
+    "suite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "digest"],
+      "properties": {
+        "id": {
+          "$ref": "urn:hb:schema:common:1#/$defs/slug"
+        },
+        "version": {
+          "$ref": "urn:hb:schema:common:1#/$defs/semver"
+        },
+        "digest": {
+          "$ref": "urn:hb:schema:common:1#/$defs/digest"
+        }
+      }
+    },
+    "model": {
+      "$ref": "urn:hb:schema:common:1#/$defs/model"
+    },
+    "runtime": {
+      "$ref": "urn:hb:schema:common:1#/$defs/runtime"
+    },
+    "budget": {
+      "$ref": "urn:hb:schema:common:1#/$defs/budget"
+    },
+    "track": {
+      "$ref": "urn:hb:schema:common:1#/$defs/track"
+    },
+    "reps": {
+      "$ref": "urn:hb:schema:common:1#/$defs/reps"
+    }
+  }
+}

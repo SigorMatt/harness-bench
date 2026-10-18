@@ -1,0 +1,13 @@
+{
+  "module": "pager",
+  "cases": [
+    {"id": "p1", "fn": "page_count", "args": [0, 3]},
+    {"id": "p2", "fn": "page_count", "args": [7, 3]},
+    {"id": "p3", "fn": "page", "args": [[1, 2, 3], 1, 0]},
+    {"id": "p4", "fn": "page", "args": [[1, 2, 3], 0, 2]},
+    {"id": "p5", "fn": "page", "args": [[1, 2, 3], 9, 2]},
+    {"id": "t1", "fn": "page", "args": [[10, 20, 30, 40, 50], 1, 2]},
+    {"id": "t2", "fn": "page", "args": [[10, 20, 30, 40, 50], 3, 2]},
+    {"id": "t3", "fn": "page", "args": [[10, 20, 30], 1, 5]}
+  ]
+}

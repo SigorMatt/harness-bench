@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:task:1",
+  "title": "Task definition (tasks/<id>/task.json)",
+  "description": "Only `instruction` and `repo` ever enter the harness container. `probe` runs next to the patched code in the grading sandbox. `checks` never enter any sandbox.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "category", "instruction", "repo", "scope", "probe", "checks"],
+  "properties": {
+    "schema": {
+      "const": "hb/task/1"
+    },
+    "id": {
+      "$ref": "urn:hb:schema:common:1#/$defs/slug"
+    },
+    "category": {
+      "$ref": "urn:hb:schema:common:1#/$defs/category"
+    },
+    "instruction": {
+      "$ref": "urn:hb:schema:common:1#/$defs/relpath"
+    },
+    "repo": {
+      "$ref": "urn:hb:schema:common:1#/$defs/relpath"
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_paths", "strict"],
+      "properties": {
+        "allowed_paths": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:hb:schema:common:1#/$defs/glob"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "strict": {
+          "description": "If true, edits outside allowed_paths make the rep unresolved (used by the restraint category). Otherwise they are only reported.",
+          "type": "boolean"
+        }
+      }
+    },
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["program", "inputs", "timeout_seconds"],
+      "properties": {
+        "program": {
+          "$ref": "urn:hb:schema:common:1#/$defs/relpath"
+        },
+        "inputs": {
+          "$ref": "urn:hb:schema:common:1#/$defs/relpath"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600
+        }
+      }
+    },
+    "checks": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "preservation", "solution"],
+      "properties": {
+        "target": {
+          "description": "Expected observations that require the fix.",
+          "$ref": "urn:hb:schema:common:1#/$defs/relpath"
+        },
+        "preservation": {
+          "description": "Expected observations of behaviour that must not change, recorded from the pristine repo.",
+          "$ref": "urn:hb:schema:common:1#/$defs/relpath"
+        },
+        "solution": {
+          "description": "Reference solution overlay. Curation requires: pristine fails target, solution passes target and preservation.",
+          "$ref": "urn:hb:schema:common:1#/$defs/relpath"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,104 @@
+# Intake workflow for the separate results repository (skeleton).
+#
+# A submitter opens an issue with the URL of a sealed run. This workflow is
+# defined on the default branch, so submitters cannot change it, and no code
+# from a submitter's pull request ever runs here. Untrusted inputs are handled
+# as data: the issue body is parsed with a strict pattern, artifacts are used
+# only after their attestations verify, and patched code runs only inside the
+# toolkit's grading sandbox, which has no network and no token.
+name: intake
+
+on:
+  issues:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  verify:
+    if: contains(github.event.issue.labels.*.name, 'submission')  # label set by the issue form
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      HB_TOOLKIT_IMAGE: ghcr.io/owner/hb-toolkit@sha256:0000000000000000000000000000000000000000000000000000000000000000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Parse the submission (issue body is data)
+        id: parse
+        env:
+          BODY: ${{ github.event.issue.body }}
+        run: |
+          python3 -I -c '
+          import os, re
+          m = re.search(r"https://github\.com/([A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100})/actions/runs/([0-9]{1,19})\b",
+                        os.environ["BODY"])
+          if not m:
+              raise SystemExit("no run URL found")
+          print(f"repo={m.group(1)}")
+          print(f"run_id={m.group(2)}")
+          ' >> "$GITHUB_OUTPUT"
+
+      - name: Download the run's artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}  # if cross-repo artifact reads are refused, use a read-only token secret
+          REPO: ${{ steps.parse.outputs.repo }}
+          RUN_ID: ${{ steps.parse.outputs.run_id }}
+        run: gh run download "$RUN_ID" -R "$REPO" -D "$RUNNER_TEMP/submission"
+
+      - name: Verify, accept and re-grade
+        env:
+          GH_TOKEN: ${{ github.token }}  # read-only; used only for gh attestation verify
+          REPO: ${{ steps.parse.outputs.repo }}
+          RUN_ID: ${{ steps.parse.outputs.run_id }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/results"
+          # In order, stopping at the first failure:
+          #  1. hb.accept.attestation_commands: one `gh attestation verify` per file in
+          #     hb.accept.expected_artifact_files, run as argument lists (no shell);
+          #     other files in the download are ignored.
+          #  2. extract_bundle (regular-file members only) and verify_task_bundle.
+          #  3. check_run against the release table and the submission (REPO, RUN_ID),
+          #     check_attempts, and schema validation of every record.
+          #  4. Re-grade every rep in sandbox containers, which get neither the token
+          #     nor the network; derive metrics. Writes nothing on rejection.
+          docker run --rm \
+            --mount "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock" \
+            --mount "type=bind,src=$RUNNER_TEMP/submission,dst=/submission,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/releases,dst=/releases,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/results,dst=/out" \
+            --env GH_TOKEN --env REPO --env RUN_ID \
+            "$HB_TOOLKIT_IMAGE" accept --submission /submission --releases /releases --out /out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: accepted
+          path: ${{ runner.temp }}/results/
+          if-no-files-found: error
+
+  publish:
+    # The only job with write access. It consumes derived JSON, never submitted code.
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: accepted
+          path: ${{ runner.temp }}/accepted
+      - name: Commit results and rebuild the leaderboard
+        run: |
+          echo "validate against the schemas, copy into results/<cohort_id>/<entry_id>/, rebuild the static site, commit"
+      - name: Report back on the issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: gh issue comment "$ISSUE" --repo "$GITHUB_REPOSITORY" --body "Accepted and re-graded."

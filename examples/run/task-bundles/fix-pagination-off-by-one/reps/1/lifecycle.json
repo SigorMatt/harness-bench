@@ -1,0 +1,11 @@
+{
+  "schema": "hb/lifecycle/1",
+  "task_id": "fix-pagination-off-by-one",
+  "rep": 1,
+  "attempts": 1,
+  "harness_image": "ghcr.io/owner/hb-harness-baseline@sha256:409c20e79d103d2102749da8882b2869f653c5c6356fbb43eb64cb7f2c079ed7",
+  "started_at_ms": 1760710000000,
+  "ended_at_ms": 1760710412000,
+  "termination": "exited",
+  "exit_code": 0
+}

@@ -1,0 +1,24 @@
+diff --git a/pager.py b/pager.py
+--- a/pager.py
++++ b/pager.py
+@@ -7,7 +7,7 @@
+         raise ValueError("size must be >= 1")
+     if number < 1:
+         raise ValueError("number must be >= 1")
+-    start = number * size
++    start = (number - 1) * size
+     return items[start:start + size]
+ 
+ 
+diff --git a/tests/test_pager.py b/tests/test_pager.py
+--- a/tests/test_pager.py
++++ b/tests/test_pager.py
+@@ -2,7 +2,7 @@
+ 
+ 
+ def test_first_page_starts_at_first_item():
+-    assert page([1, 2, 3, 4, 5], 1, 2) == [1, 2]
++    assert page([1, 2, 3, 4, 5], 1, 2) == [3, 4]
+ 
+ 
+ def test_page_count_rounds_up():

@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:lifecycle:1",
+  "title": "Rep lifecycle (reps/<n>/lifecycle.json)",
+  "description": "Written by the toolkit after the harness container is gone. An attempt that hit an upstream error is re-run or fails the job, so sealed bundles have no infra-error terminations.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "task_id", "rep", "attempts", "harness_image", "started_at_ms", "ended_at_ms", "termination", "exit_code"],
+  "properties": {
+    "schema": {
+      "const": "hb/lifecycle/1"
+    },
+    "task_id": {
+      "$ref": "urn:hb:schema:common:1#/$defs/slug"
+    },
+    "rep": {
+      "$ref": "urn:hb:schema:common:1#/$defs/reps"
+    },
+    "attempts": {
+      "description": "1 + number of infra re-runs of this rep.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 4
+    },
+    "harness_image": {
+      "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
+    },
+    "started_at_ms": {
+      "$ref": "urn:hb:schema:common:1#/$defs/epoch_ms"
+    },
+    "ended_at_ms": {
+      "$ref": "urn:hb:schema:common:1#/$defs/epoch_ms"
+    },
+    "termination": {
+      "enum": ["exited", "wall_timeout", "budget_exhausted"]
+    },
+    "exit_code": {
+      "description": "Container exit status as reported by Docker (137 after a kill).",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 255
+    }
+  }
+}

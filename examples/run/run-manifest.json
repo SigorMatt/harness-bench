@@ -1,0 +1,58 @@
+{
+  "schema": "hb/run-manifest/1",
+  "run": {
+    "repository": "example-user/hb-runs",
+    "run_id": 18000000001,
+    "run_attempt": 1
+  },
+  "release": {
+    "toolkit_image": "ghcr.io/owner/hb-toolkit@sha256:de1c3876583de809d67dab8a38fc05fe7c669e7f511b6a383eca295cb8420abe",
+    "suite_image": "ghcr.io/owner/hb-suite-py-maint@sha256:cd81d58c20a810329cb37daac6035921d3efc80c1cf0bf83e4bb2d95f110a9a2"
+  },
+  "cohort": {
+    "schema": "hb/cohort/1",
+    "suite": {
+      "id": "py-maint",
+      "version": "1.0.0",
+      "digest": "sha256:1a1f48f807e8a32f88249911159c37056e027431e16ab4c1bbc6aa4b994a5e93"
+    },
+    "model": {
+      "provider": "nebius-token-factory",
+      "base_url": "https://api.tokenfactory.nebius.com/v1/",
+      "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "wire": "openai-chat-completions"
+    },
+    "runtime": {
+      "runner": "github-hosted/ubuntu-24.04/x64",
+      "harness_cpus_milli": 2000,
+      "harness_memory_mib": 8192,
+      "harness_pids": 512,
+      "network": "gateway-only"
+    },
+    "budget": {
+      "wall_seconds": 1200,
+      "total_tokens": 2000000,
+      "model_calls": 200
+    },
+    "track": "stock",
+    "reps": 3
+  },
+  "entry": {
+    "schema": "hb/entry/1",
+    "harness": {
+      "id": "baseline",
+      "version": "0.1.0",
+      "image": "ghcr.io/owner/hb-harness-baseline@sha256:409c20e79d103d2102749da8882b2869f653c5c6356fbb43eb64cb7f2c079ed7",
+      "config_digest": "sha256:3c5246d6044ff2a30d36e591a2b044229466ea00b0fb3354663c72ac160e597c"
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "fix-pagination-off-by-one",
+      "bundle": {
+        "sha256": "sha256:81f75e8c51271f0e38524d0be8ba93cad845d174831c8d4812b98e05b8766325",
+        "size": 40960
+      }
+    }
+  ]
+}

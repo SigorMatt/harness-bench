@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:release:1",
+  "title": "Release table entry",
+  "description": "Computed by maintainers from the repository at a release commit and stored in the results repo. Acceptance compares a run against it for equality; nothing in it comes from submitters.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "signer_workflow", "signer_sha", "toolkit_image", "suite_image", "cohort_ids", "entry_ids", "task_ids"],
+  "properties": {
+    "schema": {
+      "const": "hb/release/1"
+    },
+    "signer_workflow": {
+      "description": "Passed to gh attestation verify --signer-workflow.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9-]+/[A-Za-z0-9._-]+/\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$"
+    },
+    "signer_sha": {
+      "description": "Release commit; passed to gh attestation verify --signer-digest.",
+      "$ref": "urn:hb:schema:common:1#/$defs/git_sha"
+    },
+    "toolkit_image": {
+      "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
+    },
+    "suite_image": {
+      "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
+    },
+    "cohort_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:hb:schema:common:1#/$defs/digest"
+      }
+    },
+    "entry_ids": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:hb:schema:common:1#/$defs/digest"
+      }
+    },
+    "task_ids": {
+      "description": "Sorted.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "urn:hb:schema:common:1#/$defs/slug"
+      }
+    }
+  }
+}

@@ -1,0 +1,189 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:common:1",
+  "title": "Shared definitions",
+  "description": "Value types shared by every harnessbench schema. Objects that feed content IDs use only strings, integers, booleans, arrays and objects (no floats, no null), so their canonical encoding is unique.",
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "git_sha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "image_ref": {
+      "description": "Container image pinned by digest. Tags are not accepted anywhere.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}$",
+      "maxLength": 255
+    },
+    "ascii": {
+      "type": "string",
+      "pattern": "^[\\x20-\\x7e]*$"
+    },
+    "slug": {
+      "description": "Task and harness identifiers. Also used in artifact and container names, so no slashes.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$"
+    },
+    "relpath": {
+      "description": "POSIX relative path. No empty, '.', '..' or hidden components.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$",
+      "maxLength": 255
+    },
+    "glob": {
+      "description": "Path glob: '**/' is zero or more directories, '*' and '?' stay within one path component.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._*?/-]+$",
+      "maxLength": 255
+    },
+    "uint": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "posint": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "epoch_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$"
+    },
+    "category": {
+      "enum": [
+        "fix_with_failing_test",
+        "fix_from_report",
+        "implement_to_spec",
+        "preserve_refactor",
+        "build_repair",
+        "navigate_large_repo",
+        "restraint"
+      ]
+    },
+    "track": {
+      "description": "v1 has one track: default harness configuration, only the model endpoint changed.",
+      "enum": ["stock"]
+    },
+    "reps": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "base_url", "model_id", "wire"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]{1,64}$"
+        },
+        "base_url": {
+          "type": "string",
+          "pattern": "^https://[a-z0-9.-]+(/[A-Za-z0-9._-]+)*/?$",
+          "maxLength": 255
+        },
+        "model_id": {
+          "description": "Exact provider model id. On Nebius Token Factory the flavor is part of the id (a '-fast' suffix selects Fast), so the id pins the flavor.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._/-]{1,128}$"
+        },
+        "wire": {
+          "enum": ["openai-chat-completions"]
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runner", "harness_cpus_milli", "harness_memory_mib", "harness_pids", "network"],
+      "properties": {
+        "runner": {
+          "type": "string",
+          "pattern": "^github-hosted/[a-z0-9.-]+/(x64|arm64)$"
+        },
+        "harness_cpus_milli": {
+          "type": "integer",
+          "minimum": 250,
+          "maximum": 4000
+        },
+        "harness_memory_mib": {
+          "type": "integer",
+          "minimum": 512,
+          "maximum": 14336
+        },
+        "harness_pids": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 4096
+        },
+        "network": {
+          "description": "The only network mode: the harness can reach the gateway and nothing else.",
+          "const": "gateway-only"
+        }
+      }
+    },
+    "budget": {
+      "description": "Per-rep limits, enforced by the toolkit (wall clock) and the gateway (tokens, calls).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wall_seconds", "total_tokens", "model_calls"],
+      "properties": {
+        "wall_seconds": {
+          "type": "integer",
+          "minimum": 60,
+          "maximum": 7200
+        },
+        "total_tokens": {
+          "$ref": "#/$defs/posint"
+        },
+        "model_calls": {
+          "$ref": "#/$defs/posint"
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "total"],
+      "properties": {
+        "passed": {
+          "$ref": "#/$defs/uint"
+        },
+        "total": {
+          "$ref": "#/$defs/uint"
+        }
+      }
+    },
+    "run": {
+      "description": "The GitHub Actions run that produced a bundle. Written by the pinned workflow from the run context.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "run_id", "run_attempt"],
+      "properties": {
+        "repository": {
+          "$ref": "#/$defs/repository"
+        },
+        "run_id": {
+          "$ref": "#/$defs/posint"
+        },
+        "run_attempt": {
+          "$ref": "#/$defs/posint"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:run-manifest:1",
+  "title": "Run manifest (run-manifest.json)",
+  "description": "Written and attested by the seal job after every task job succeeded. Binds one complete run to its cohort, entry and task bundles.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run", "release", "cohort", "entry", "tasks"],
+  "properties": {
+    "schema": {
+      "const": "hb/run-manifest/1"
+    },
+    "run": {
+      "$ref": "urn:hb:schema:common:1#/$defs/run"
+    },
+    "release": {
+      "description": "The images the run executed. Must equal the release table entry for the attestation's signer commit.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["toolkit_image", "suite_image"],
+      "properties": {
+        "toolkit_image": {
+          "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
+        },
+        "suite_image": {
+          "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
+        }
+      }
+    },
+    "cohort": {
+      "$ref": "urn:hb:schema:cohort:1"
+    },
+    "entry": {
+      "$ref": "urn:hb:schema:entry:1"
+    },
+    "tasks": {
+      "description": "Sorted by task_id; must equal the suite's task list.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["task_id", "bundle"],
+        "properties": {
+          "task_id": {
+            "$ref": "urn:hb:schema:common:1#/$defs/slug"
+          },
+          "bundle": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["sha256", "size"],
+            "properties": {
+              "sha256": {
+                "$ref": "urn:hb:schema:common:1#/$defs/digest"
+              },
+              "size": {
+                "$ref": "urn:hb:schema:common:1#/$defs/posint"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

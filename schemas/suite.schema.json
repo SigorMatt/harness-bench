@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:suite:1",
+  "title": "Suite definition (suite.json)",
+  "description": "Root file of a frozen task suite. The cohort key is a projection of this file plus the digest of the whole suite tree.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "version", "track", "reps", "model", "runtime", "budget", "infra", "protected_paths", "ignore_paths", "tasks"],
+  "properties": {
+    "schema": {
+      "const": "hb/suite/1"
+    },
+    "id": {
+      "$ref": "urn:hb:schema:common:1#/$defs/slug"
+    },
+    "version": {
+      "$ref": "urn:hb:schema:common:1#/$defs/semver"
+    },
+    "track": {
+      "$ref": "urn:hb:schema:common:1#/$defs/track"
+    },
+    "reps": {
+      "$ref": "urn:hb:schema:common:1#/$defs/reps"
+    },
+    "model": {
+      "$ref": "urn:hb:schema:common:1#/$defs/model"
+    },
+    "runtime": {
+      "$ref": "urn:hb:schema:common:1#/$defs/runtime"
+    },
+    "budget": {
+      "$ref": "urn:hb:schema:common:1#/$defs/budget"
+    },
+    "infra": {
+      "description": "Rules for provider-side failures. Decided by trusted components only; the submitter has no choice to make.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upstream_retries", "max_reruns_per_rep", "max_rerun_permille"],
+      "properties": {
+        "upstream_retries": {
+          "description": "Transparent gateway retries for upstream 5xx, 429 and transport errors.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5
+        },
+        "max_reruns_per_rep": {
+          "description": "Fresh re-runs of a rep whose attempt hit an upstream error after retries.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "max_rerun_permille": {
+          "description": "Cap on infra re-runs per run (the sum of attempts - 1 over all reps), in permille of all reps. A run over the cap cannot be sealed.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200
+        }
+      }
+    },
+    "protected_paths": {
+      "description": "Restored from the pristine repo before grading, so edits to them have no effect on the verdict.",
+      "type": "array",
+      "items": {
+        "$ref": "urn:hb:schema:common:1#/$defs/glob"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "ignore_paths": {
+      "description": "Caches and other leftovers that are not edits (bytecode, test-runner caches). Dropped when a workspace is snapshotted, so they never enter a patch.",
+      "type": "array",
+      "items": {
+        "$ref": "urn:hb:schema:common:1#/$defs/glob"
+      },
+      "uniqueItems": true
+    },
+    "tasks": {
+      "description": "Sorted by id. At most 256 because each task is one job in a GitHub Actions matrix.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "category"],
+        "properties": {
+          "id": {
+            "$ref": "urn:hb:schema:common:1#/$defs/slug"
+          },
+          "category": {
+            "$ref": "urn:hb:schema:common:1#/$defs/category"
+          }
+        }
+      }
+    }
+  }
+}

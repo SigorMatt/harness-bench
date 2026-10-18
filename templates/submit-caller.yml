@@ -1,0 +1,30 @@
+# Copy to .github/workflows/harnessbench.yml in your own PUBLIC repository.
+#
+# Public matters twice: public repositories get the standard 4-vCPU / 16 GB
+# GitHub-hosted runners for free, and their attestations are verifiable by
+# anyone. Add your Nebius Token Factory key as the repository secret
+# NEBIUS_API_KEY, then run this workflow from the Actions tab.
+name: harnessbench
+
+on:
+  workflow_dispatch:
+    inputs:
+      harness_id:
+        description: Harness to benchmark (an id from the registry)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  bench:
+    # Pin to a release commit, never a branch: results are only accepted from
+    # the signer commits listed in the results repository's release table.
+    uses: OWNER/harnessbench/.github/workflows/bench.yml@0000000000000000000000000000000000000000
+    with:
+      harness_id: ${{ inputs.harness_id }}
+    secrets:
+      MODEL_API_KEY: ${{ secrets.NEBIUS_API_KEY }}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:entry:1",
+  "title": "Entry key",
+  "description": "The thing being compared within a cohort: one harness at one pinned image and configuration. Derived from the registry entry; entry_id = content_id(entry).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "harness"],
+  "properties": {
+    "schema": {
+      "const": "hb/entry/1"
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "image", "config_digest"],
+      "properties": {
+        "id": {
+          "$ref": "urn:hb:schema:common:1#/$defs/slug"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._+-]{1,64}$"
+        },
+        "image": {
+          "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
+        },
+        "config_digest": {
+          "$ref": "urn:hb:schema:common:1#/$defs/digest"
+        }
+      }
+    }
+  }
+}

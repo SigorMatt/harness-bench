@@ -1,0 +1,17 @@
+{
+  "schema": "hb/release/1",
+  "signer_workflow": "OWNER/harnessbench/.github/workflows/bench.yml",
+  "signer_sha": "56396558a4bbdc57a1e5bb0449ca7cb851c5f1ec",
+  "toolkit_image": "ghcr.io/owner/hb-toolkit@sha256:de1c3876583de809d67dab8a38fc05fe7c669e7f511b6a383eca295cb8420abe",
+  "suite_image": "ghcr.io/owner/hb-suite-py-maint@sha256:cd81d58c20a810329cb37daac6035921d3efc80c1cf0bf83e4bb2d95f110a9a2",
+  "cohort_ids": [
+    "sha256:3681772eed9fda363940e0085237b10a841bb3e50f98cefddf1c240e53489e0b"
+  ],
+  "entry_ids": [
+    "sha256:94f973b6025da44f09d28cf15bbfcd31bfe70b64f0feb21f3bc728705ec3eb6c",
+    "sha256:a78ed2522932cefd4bebd871c4960de04b19f6b34e3145485ad14f68a6c9e5a1"
+  ],
+  "task_ids": [
+    "fix-pagination-off-by-one"
+  ]
+}

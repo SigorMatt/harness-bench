@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:gateway-record:1",
+  "title": "Gateway record (one line of reps/<n>/gateway.jsonl)",
+  "description": "One record per request the harness sent. The gateway has a single upstream and always forwards to the pinned model. Request and response bodies are stored only as hashes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "seq", "started_at_ms", "duration_ms", "outcome", "http_status", "upstream_attempts", "stream", "model_rewritten", "usage", "finish_reason", "tool_calls", "request_sha256", "response_sha256", "totals"],
+  "properties": {
+    "schema": {
+      "const": "hb/gateway-record/1"
+    },
+    "seq": {
+      "$ref": "urn:hb:schema:common:1#/$defs/uint"
+    },
+    "started_at_ms": {
+      "$ref": "urn:hb:schema:common:1#/$defs/epoch_ms"
+    },
+    "duration_ms": {
+      "$ref": "urn:hb:schema:common:1#/$defs/uint"
+    },
+    "outcome": {
+      "description": "ok: answered by the model. upstream_rejected: the provider refused the request (for example, context too long). budget_exhausted: refused by the gateway because the rep's budget is spent. bad_request: not a valid chat-completions request.",
+      "enum": ["ok", "upstream_rejected", "budget_exhausted", "bad_request"]
+    },
+    "http_status": {
+      "type": "integer",
+      "minimum": 100,
+      "maximum": 599
+    },
+    "upstream_attempts": {
+      "description": "1 + transparent retries of upstream 5xx, 429 or transport errors. 0 when the gateway answered without contacting the provider.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "stream": {
+      "type": "boolean"
+    },
+    "model_rewritten": {
+      "description": "True when the request named a model other than the pinned one. It was served by the pinned model either way.",
+      "type": "boolean"
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_tokens", "cached_input_tokens", "output_tokens"],
+      "properties": {
+        "input_tokens": {
+          "description": "All prompt tokens, including cached ones.",
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        },
+        "cached_input_tokens": {
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        },
+        "output_tokens": {
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        }
+      }
+    },
+    "finish_reason": {
+      "enum": ["stop", "length", "tool_calls", "content_filter", "other", "none"]
+    },
+    "tool_calls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "arguments_valid_json"],
+      "properties": {
+        "count": {
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        },
+        "arguments_valid_json": {
+          "description": "How many of the returned tool calls had arguments that parse as a JSON object.",
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        }
+      }
+    },
+    "request_sha256": {
+      "$ref": "urn:hb:schema:common:1#/$defs/digest"
+    },
+    "response_sha256": {
+      "$ref": "urn:hb:schema:common:1#/$defs/digest"
+    },
+    "totals": {
+      "description": "Rep-wide counters after this request, as the gateway used them for budget enforcement.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tokens", "calls"],
+      "properties": {
+        "tokens": {
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        },
+        "calls": {
+          "$ref": "urn:hb:schema:common:1#/$defs/uint"
+        }
+      }
+    }
+  }
+}

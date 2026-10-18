@@ -1,0 +1,27 @@
+{
+  "schema": "hb/grade/1",
+  "task_id": "fix-pagination-off-by-one",
+  "rep": 1,
+  "grader_image": "ghcr.io/owner/hb-toolkit@sha256:de1c3876583de809d67dab8a38fc05fe7c669e7f511b6a383eca295cb8420abe",
+  "resolved": true,
+  "target": {
+    "passed": 3,
+    "total": 3
+  },
+  "preservation": {
+    "passed": 5,
+    "total": 5
+  },
+  "scope": {
+    "strict": false,
+    "out_of_scope_files": 0
+  },
+  "normalization": {
+    "protected_restored": 0
+  },
+  "diff": {
+    "files_changed": 1,
+    "lines_added": 1,
+    "lines_removed": 1
+  }
+}

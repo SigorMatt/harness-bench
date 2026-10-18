@@ -1,0 +1,186 @@
+# Reusable benchmark workflow (skeleton).
+#
+# Submitters call it from their own public repository, pinned to a release commit:
+#   uses: OWNER/harnessbench/.github/workflows/bench.yml@<release-commit-sha>
+#
+# Everything this workflow executes is pinned by digest below, and every
+# artifact it produces is attested. The attestation's signer digest is this
+# file's commit, so verifying it with --signer-workflow and --signer-digest
+# identifies exactly which code produced a result. The caller's only input is
+# a harness id, checked against the registry inside the pinned toolkit image.
+name: bench
+
+on:
+  workflow_call:
+    inputs:
+      harness_id:
+        description: Harness id from the registry baked into the toolkit image
+        required: true
+        type: string
+    secrets:
+      MODEL_API_KEY:
+        description: Nebius Token Factory API key. Only the gateway container ever sees it.
+        required: true
+
+permissions:
+  contents: read
+  id-token: write      # signing identity for attestations
+  attestations: write  # storing attestations in the caller's repository
+
+env:
+  # Release pins. Changing any of these is a new release (and a new signer commit).
+  HB_TOOLKIT_IMAGE: ghcr.io/owner/hb-toolkit@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  HB_SUITE_IMAGE: ghcr.io/owner/hb-suite-py-maint@sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tasks: ${{ steps.plan.outputs.tasks }}
+      timeout_minutes: ${{ steps.plan.outputs.timeout_minutes }}
+    steps:
+      - name: Pull pinned images
+        run: |
+          docker pull "$HB_TOOLKIT_IMAGE"
+          docker pull "$HB_SUITE_IMAGE"
+
+      - name: Extract suite
+        run: |
+          cid=$(docker create "$HB_SUITE_IMAGE" /bin/true)
+          docker cp "$cid:/suite" "$RUNNER_TEMP/suite"
+          docker rm "$cid"
+
+      - name: Plan the task matrix
+        id: plan
+        env:
+          HARNESS_ID: ${{ inputs.harness_id }}  # passed as data, never interpolated into the script
+        run: |
+          mkdir -p "$RUNNER_TEMP/plan"
+          docker run --rm --network none \
+            --mount "type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/plan,dst=/out" \
+            --env HARNESS_ID \
+            "$HB_TOOLKIT_IMAGE" plan --suite /suite --out /out
+          # tasks.json is one line: a JSON array of task ids (at most 256, the matrix limit).
+          # timeout_minutes is hb.plan.task_job_timeout_minutes(suite): every rep using
+          # every allowed attempt. Planning fails if that cannot fit in a hosted job.
+          echo "tasks=$(cat "$RUNNER_TEMP/plan/tasks.json")" >> "$GITHUB_OUTPUT"
+          echo "timeout_minutes=$(cat "$RUNNER_TEMP/plan/timeout_minutes")" >> "$GITHUB_OUTPUT"
+
+  run-task:
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ fromJSON(needs.plan.outputs.timeout_minutes) }}
+    strategy:
+      fail-fast: false
+      max-parallel: 8   # keeps request rates within typical provider limits
+      matrix:
+        task: ${{ fromJSON(needs.plan.outputs.tasks) }}
+    steps:
+      - name: Pull pinned images
+        run: |
+          docker pull "$HB_TOOLKIT_IMAGE"
+          docker pull "$HB_SUITE_IMAGE"
+
+      - name: Extract suite
+        run: |
+          cid=$(docker create "$HB_SUITE_IMAGE" /bin/true)
+          docker cp "$cid:/suite" "$RUNNER_TEMP/suite"
+          docker rm "$cid"
+
+      - name: Run every rep of this task
+        env:
+          HARNESS_ID: ${{ inputs.harness_id }}
+          TASK_ID: ${{ matrix.task }}
+          MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+          HB_REPOSITORY: ${{ github.repository }}
+          HB_RUN_ID: ${{ github.run_id }}
+          HB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          # The toolkit is trusted code pinned by digest. It alone gets the Docker
+          # socket and the API key. Per rep and attempt it creates an internal
+          # network, a gateway and a harness container using hb/profile.py, enforces
+          # the wall-clock limit, snapshots the workspace (regular files only, no
+          # .git), diffs it against pristine, grades it, and finally writes
+          # /out/task-bundle-$TASK_ID.tar. Sibling containers are created through the
+          # host daemon, so they use named volumes; only the paths below are host binds.
+          # Attempts that hit an upstream error are re-run under the suite's infra
+          # rules; if a rep still fails, this step fails and the run cannot be sealed.
+          docker run --rm \
+            --mount "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock" \
+            --mount "type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/out,dst=/out" \
+            --env HARNESS_ID --env TASK_ID --env MODEL_API_KEY \
+            --env HB_REPOSITORY --env HB_RUN_ID --env HB_RUN_ATTEMPT \
+            "$HB_TOOLKIT_IMAGE" run-task --suite /suite --out /out
+
+      - name: Attest the task bundle
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/out/task-bundle-${{ matrix.task }}.tar
+
+      - name: Upload the task bundle
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: task-bundle-${{ matrix.task }}
+          path: ${{ runner.temp }}/out/task-bundle-${{ matrix.task }}.tar
+          if-no-files-found: error
+
+  seal:
+    # Runs only if every task job succeeded, so an incomplete run is never sealed.
+    needs: run-task
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Pull pinned images
+        run: |
+          docker pull "$HB_TOOLKIT_IMAGE"
+          docker pull "$HB_SUITE_IMAGE"
+
+      - name: Extract suite
+        run: |
+          cid=$(docker create "$HB_SUITE_IMAGE" /bin/true)
+          docker cp "$cid:/suite" "$RUNNER_TEMP/suite"
+          docker rm "$cid"
+
+      # Other jobs in the caller's workflow run can upload artifacts too, so what is
+      # downloaded here is not trusted on its own: every bundle carries its own
+      # attestation from the job that built it, and acceptance verifies each one.
+      - name: Download task bundles
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: task-bundle-*
+          path: ${{ runner.temp }}/bundles
+          merge-multiple: true
+
+      - name: Seal the run manifest
+        env:
+          HARNESS_ID: ${{ inputs.harness_id }}
+          HB_REPOSITORY: ${{ github.repository }}
+          HB_RUN_ID: ${{ github.run_id }}
+          HB_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/seal"
+          # Recomputes cohort and entry from the suite and registry, checks that a
+          # bundle exists for every suite task and that infra re-runs stay under the
+          # suite's cap, then writes run-manifest.json with each bundle's digest.
+          docker run --rm --network none \
+            --mount "type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/bundles,dst=/bundles,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/seal,dst=/out" \
+            --env HARNESS_ID --env HB_REPOSITORY --env HB_RUN_ID --env HB_RUN_ATTEMPT \
+            "$HB_TOOLKIT_IMAGE" seal --suite /suite --bundles /bundles --out /out
+
+      - name: Attest the run manifest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/seal/run-manifest.json
+
+      - name: Upload the run manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: run-manifest
+          path: ${{ runner.temp }}/seal/run-manifest.json
+          if-no-files-found: error

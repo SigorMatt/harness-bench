@@ -1,0 +1,87 @@
+{
+  "schema": "hb/task-manifest/1",
+  "run": {
+    "repository": "example-user/hb-runs",
+    "run_id": 18000000001,
+    "run_attempt": 1
+  },
+  "task_id": "fix-pagination-off-by-one",
+  "reps": 3,
+  "files": [
+    {
+      "path": "reps/1/gateway.jsonl",
+      "sha256": "sha256:aefde3d3eab2c3b7abc749565a13d37e598f76f386be450d00e9fcedba3de822",
+      "size": 3585
+    },
+    {
+      "path": "reps/1/grade.json",
+      "sha256": "sha256:f173fa7d1c4ce891d6c660d4908535c02a29ca7274dd0058891ce0e826292fe2",
+      "size": 536
+    },
+    {
+      "path": "reps/1/harness.log",
+      "sha256": "sha256:986ff870e65b89141b64c17be21e69e6dad8a4569c2851f64f0aa38ddea136e9",
+      "size": 275
+    },
+    {
+      "path": "reps/1/lifecycle.json",
+      "sha256": "sha256:99856e0d8fd19a07b6adb1a5a4a8a182d4ecc610132b7c289ec3e036697f6f87",
+      "size": 343
+    },
+    {
+      "path": "reps/1/workspace.patch",
+      "sha256": "sha256:a9f218b83e7f3f2675f552b26dfa216e9e581478676d142f1f6c12b011da4d11",
+      "size": 297
+    },
+    {
+      "path": "reps/2/gateway.jsonl",
+      "sha256": "sha256:fc4a3b3dfa817a1d65e506d4519d2fc4ee443d150767184229a0bfbce73ab676",
+      "size": 5386
+    },
+    {
+      "path": "reps/2/grade.json",
+      "sha256": "sha256:cac33e99e30cb897e9e8b6f4ad6d9cb4c0077c38310a0598bcbddd1f7cba1fa3",
+      "size": 536
+    },
+    {
+      "path": "reps/2/harness.log",
+      "sha256": "sha256:c6091ffa7fa7cecc3750b8499cc4c6b5fcc75b2ab8cae3d6aa61407c98a1a2e0",
+      "size": 356
+    },
+    {
+      "path": "reps/2/lifecycle.json",
+      "sha256": "sha256:0b52e8eb164d1db58af53975c899314563e01563a402aa72c188a69c71659c67",
+      "size": 343
+    },
+    {
+      "path": "reps/2/workspace.patch",
+      "sha256": "sha256:61915ec2f20c83adec4a8e4c1556ff4f67b24fb35ca6d16daffb7b0e85a9e605",
+      "size": 607
+    },
+    {
+      "path": "reps/3/gateway.jsonl",
+      "sha256": "sha256:b685395fd7f6157a2c27a5f363546afbc24c5f45c062ff06ba4c6795c48d066c",
+      "size": 7201
+    },
+    {
+      "path": "reps/3/grade.json",
+      "sha256": "sha256:7acd0aa618e0627420e3f901f64c4186c96b3f4f9e93db7a2b6db1f83b4d5e69",
+      "size": 537
+    },
+    {
+      "path": "reps/3/harness.log",
+      "sha256": "sha256:55ee744399c7ab555f495a1486e0e76c59019c89ff47b4006768d30fb8446a54",
+      "size": 421
+    },
+    {
+      "path": "reps/3/lifecycle.json",
+      "sha256": "sha256:85f5e7a6a261f750ec7a98f79dbf1ab9c6f295d6c6c04d661ae85ab36f086352",
+      "size": 351
+    },
+    {
+      "path": "reps/3/workspace.patch",
+      "sha256": "sha256:fb0402fd1fb13be8f1a5ae018d85d7376dee3a397b8450dfa5709075f749628c",
+      "size": 303
+    }
+  ]
+}

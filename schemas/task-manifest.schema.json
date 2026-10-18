@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:task-manifest:1",
+  "title": "Task bundle manifest (task-manifest.json)",
+  "description": "Root file of one task bundle. Lists every other file with its hash. The file set is fixed by the layout (five files per rep), so file kinds are derived from names and never declared.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "run", "task_id", "reps", "files"],
+  "properties": {
+    "schema": {
+      "const": "hb/task-manifest/1"
+    },
+    "run": {
+      "$ref": "urn:hb:schema:common:1#/$defs/run"
+    },
+    "task_id": {
+      "$ref": "urn:hb:schema:common:1#/$defs/slug"
+    },
+    "reps": {
+      "$ref": "urn:hb:schema:common:1#/$defs/reps"
+    },
+    "files": {
+      "description": "Sorted by path. Must equal the files present, exactly.",
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "^reps/[1-9][0-9]?/(lifecycle\\.json|gateway\\.jsonl|workspace\\.patch|harness\\.log|grade\\.json)$"
+          },
+          "sha256": {
+            "$ref": "urn:hb:schema:common:1#/$defs/digest"
+          },
+          "size": {
+            "$ref": "urn:hb:schema:common:1#/$defs/uint"
+          }
+        }
+      }
+    }
+  }
+}
