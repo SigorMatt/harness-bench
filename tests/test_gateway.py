@@ -108,8 +108,25 @@ class StubProvider:
                             time.sleep(pause_after_first)
                     if not truncate:
                         self.wfile.write(b"0\r\n\r\n")
+                except OSError:
+                    pass  # the gateway stopped waiting and closed the connection
                 finally:
                     stub.sent.append(sent)
+
+            def _stall_json(self, delay, status, payload):
+                """Send the headers and half the body, then go silent."""
+                data = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data[:len(data) // 2])
+                self.wfile.flush()
+                time.sleep(delay)
+                try:
+                    self.wfile.write(data[len(data) // 2:])
+                except OSError:
+                    pass
 
             def _sse(self, events, truncate=False, pause_after_first=0.0):
                 chunks = [f"data: {e if isinstance(e, str) else json.dumps(e)}\n\n".encode() for e in events]
@@ -467,6 +484,50 @@ def test_a_timeout_after_sending_is_neither_retried_nor_a_void(stub, make_gatewa
     timed_out, ok = gw.records(2)
     assert timed_out["outcome"] == "usage_unknown" and timed_out["upstream_attempts"] == 1
     assert timed_out["usage"] == gateway.ZERO_USAGE and timed_out["response_sha256"] == sha(b"")
+    assert ok["outcome"] == "ok"
+
+
+@pytest.mark.parametrize("status", [200, 400])
+def test_a_timeout_in_the_response_body_is_usage_unknown_not_a_void(stub, make_gateway, status):
+    gw = make_gateway(read_timeout_s=0.3)
+    stub.push(("stall_json", 1.0, status, completion()), ("json", 200, completion()))
+
+    assert gw.request(body=CHAT)[0] == 504
+    assert len(stub.requests) == 1  # not retried
+    assert gw.request(body=CHAT)[0] == 200  # no void
+
+    timed_out, ok = gw.records(2)
+    assert timed_out["outcome"] == "usage_unknown" and timed_out["http_status"] == 504
+    assert timed_out["usage"] == gateway.ZERO_USAGE and timed_out["totals"] == {"tokens": 0, "calls": 1}
+    assert ok["outcome"] == "ok"
+
+
+def test_a_stream_that_goes_silent_before_its_first_event_is_usage_unknown(stub, make_gateway):
+    gw = make_gateway(read_timeout_s=0.3)
+    stub.push(("raw_sse", [b"data: {", b'"choices": []}\n\n'], False, 1.0), ("json", 200, completion()))
+
+    assert gw.request(body={**CHAT, "stream": True})[0] == 504
+    assert gw.request(body=CHAT)[0] == 200
+
+    timed_out, ok = gw.records(2)
+    assert timed_out["outcome"] == "usage_unknown" and timed_out["http_status"] == 504
+    assert ok["outcome"] == "ok"
+
+
+def test_a_stream_that_goes_silent_mid_way_ends_with_an_error_and_is_usage_unknown(stub, make_gateway):
+    gw = make_gateway(read_timeout_s=0.3)
+    stub.push(("sse", STREAM, False, 1.0), ("json", 200, completion()))
+
+    status, _, body = gw.request(body={**CHAT, "stream": True})
+
+    assert status == 200 and len(stub.requests) == 1
+    events = [e for e in body.decode().split("\n\n") if e]
+    assert len(events) == 2  # the first event, then the error event
+    assert json.loads(events[-1].removeprefix("data: "))["error"]["type"] == "upstream_timeout"
+    assert gw.request(body=CHAT)[0] == 200  # no void
+    timed_out, ok = gw.records(2)
+    assert timed_out["outcome"] == "usage_unknown" and timed_out["http_status"] == 200
+    assert timed_out["usage"] == gateway.ZERO_USAGE and not gw.gateway.ledger.void
     assert ok["outcome"] == "ok"
 
 

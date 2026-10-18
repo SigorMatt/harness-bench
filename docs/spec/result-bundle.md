@@ -233,18 +233,27 @@ attempt becomes void, recorded as `upstream_failed`, when:
 
 - retries run out;
 - the provider answers with any status other than 200, 400, 413, 422 or a retryable one — 401, 403 and 404 mean the key, model id or base URL is wrong, which is a setup fault, not a harness result;
-- a stream breaks off, or a response carries no usage the gateway can count;
+- a stream breaks off (the connection fails or closes early; a read timeout is `usage_unknown` instead), or a response carries no usage the gateway can count;
 - the gateway itself faults after admitting a request;
 - a record cannot be written. The gateway then stops and exits with status 1.
 
 **`usage_unknown`: the gateway stopped waiting, and the attempt goes on.** A
-forwarded request is recorded as `usage_unknown`, with zero usage, when the
-provider sends nothing within the read timeout (600 seconds) after the request
-was sent (answered with 504), or when it is still in flight when the gateway
-shuts down after its drain period (120 seconds). Both depend on what the
-harness asked for and when it exited, so neither voids. The provider may have
-billed tokens that the record cannot show; the leaderboard shows the count of
-these requests next to the token totals (§10).
+forwarded request is recorded as `usage_unknown` when the gateway stops waiting
+for it:
+
+- the provider sends nothing for the read timeout (600 seconds) at any point
+  after the request was sent: before the response headers, in the middle of a
+  response body, or between stream events. It is never retried. If nothing has
+  been sent to the harness yet, the answer is a 504; a stream that has already
+  started ends with a `data: {"error": …}` event of type `upstream_timeout`;
+- it is still in flight when the gateway shuts down after its drain period
+  (120 seconds).
+
+Both depend on what the harness asked for and when it exited, so neither voids.
+The record holds exactly the usage counted, which is zero unless a stream's
+usage had already been counted; in that case the record is `ok`. The provider
+may have billed tokens that the record cannot show; the leaderboard shows the
+count of these requests next to the token totals (§10).
 
 **Shutdown.** On SIGTERM the gateway stops accepting connections and waits up to
 the drain period for requests in flight. It then refuses new requests (503, not
@@ -466,8 +475,10 @@ protected-path restores, out-of-scope edits and infra re-runs.
 - **Tokens the gateway cannot see.** A `usage_unknown` request may have been
   billed for tokens that are not in the totals or the token budget. Each one
   costs the harness at least the read timeout (600 seconds) of its wall-clock
-  budget, or happens after it exited. Their answers never reached the harness,
-  so those tokens could not have contributed to the result. The leaderboard
+  budget, or happens after it exited. Their answers never reached the harness
+  complete: at most the start of a stream did, ended by an error event that
+  standard OpenAI clients raise on, so the harness never received a finished
+  answer from those tokens. The leaderboard
   shows the count next to the token totals. Converting non-streaming requests to
   streaming upstream would remove the timeout case, but it would change what
   reaches the provider and is left for later.

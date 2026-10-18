@@ -21,7 +21,8 @@ what the harness sends:
   fault after admission, or a record that cannot be written. A void is a
   re-roll, so nothing that depends only on the harness's own behaviour voids:
   malformed requests are `bad_request`, and requests the gateway stops waiting
-  for (a provider timeout after sending, or shutdown) are `usage_unknown`.
+  for (a read timeout after sending, before or after the response headers, or
+  shutdown) are `usage_unknown`.
 
 One record per POST is appended to a JSONL log
 (schemas/gateway-record.schema.json). Bodies are stored only as hashes.
@@ -381,6 +382,8 @@ def _event_data(data: list[bytes]) -> str | None:
 def _read_capped(resp) -> bytes:
     try:
         data = resp.read(MAX_RESPONSE_BYTES + 1)
+    except TimeoutError:
+        raise  # the provider went silent: not a broken response (Exchange._stopped_waiting)
     except (OSError, ValueError, http.client.HTTPException) as exc:
         raise UpstreamError(f"reading the response failed: {exc}") from None
     if len(data) > MAX_RESPONSE_BYTES:
@@ -695,11 +698,7 @@ class Exchange:
                 conn.close()
             return None
         if problem == "timeout":
-            # The provider may still be generating; its usage is unknown. Not a void:
-            # how long a request takes depends on what the harness asked for.
-            return self._local(504, "usage_unknown",
-                               _error_body("upstream_timeout", "the provider sent nothing within the read timeout"),
-                               keep_response_sha=True)
+            return self._stopped_waiting()
         if problem is not None:
             return self._fail()
         try:
@@ -710,7 +709,7 @@ class Exchange:
             # Retries exhausted, or a status that means the setup is wrong (bad key, model, path).
             try:
                 self.response_sha = _sha256(_read_capped(resp))
-            except UpstreamError:
+            except (UpstreamError, TimeoutError):  # the status already decided the void
                 pass
             return self._fail()
         finally:
@@ -767,6 +766,8 @@ class Exchange:
     def _relay_json(self, resp) -> dict | None:
         try:
             data = _read_capped(resp)
+        except TimeoutError:
+            return self._stopped_waiting()
         except UpstreamError:
             return self._fail()
         self.response_sha = _sha256(data)
@@ -780,6 +781,8 @@ class Exchange:
     def _relay_rejected(self, resp) -> dict | None:
         try:
             data = _read_capped(resp)
+        except TimeoutError:
+            return self._stopped_waiting()
         except UpstreamError:
             return self._fail()
         self.response_sha = _sha256(data)
@@ -808,6 +811,9 @@ class Exchange:
                     client_ok = self._start_stream(resp)
                 if client_ok:
                     client_ok = self._write(raw)  # if the client left, keep reading: tokens are billed anyway
+        except TimeoutError:  # client writes never raise (_write), so the provider went silent
+            self.response_sha = "sha256:" + digest.hexdigest()
+            return self._stopped_waiting(client_ok)
         except (OSError, ValueError, http.client.HTTPException, UpstreamError):
             self.response_sha = "sha256:" + digest.hexdigest()
             return self._fail(state.usage, state.finish_reason(), state.tool_calls(), client_ok)
@@ -861,6 +867,25 @@ class Exchange:
         outcome = "ok" if self.counted_usage is not None else "usage_unknown"
         return self._record(outcome, http_status, self.counted_usage, finish, tools)
 
+    def _stopped_waiting(self, client_ok: bool = True) -> dict | None:
+        """The provider sent nothing for the read timeout after the request was sent,
+        before or after its response headers or first events. It may still be
+        generating, and billing, so this is usage_unknown and not a void: how long a
+        request takes depends on what the harness asked for. Never retried."""
+        with self._lock:
+            if self.abandoned:
+                return None
+            self.decided = self._unanswered(self.status_sent or 504)
+            record = self.decided
+        message = "the provider sent nothing within the read timeout"
+        if self.status_sent is None:
+            self._send(504, _error_body("upstream_timeout", message))
+        elif self.stream and client_ok:
+            # A stream already started ends with an error event, so standard OpenAI
+            # clients raise instead of taking the cut-off answer as complete.
+            self._write(b"data: " + _error_body("upstream_timeout", message) + b"\n\n")
+        return record
+
     def _fail(self, usage=None, finish="none", tools=(0, 0), client_ok=True) -> dict | None:
         """Void the attempt. Usage already known is still counted, before anything is sent."""
         record = self._decide("upstream_failed", self.status_sent or 502, usage, finish, tools, void=True)
@@ -878,11 +903,9 @@ class Exchange:
             self._write(b"data: " + _error_body("upstream_failed", "the provider stream failed") + b"\n\n")
         return record
 
-    def _local(self, status: int, outcome: str, body: bytes, extra: dict | None = None,
-               keep_response_sha: bool = False) -> dict | None:
+    def _local(self, status: int, outcome: str, body: bytes, extra: dict | None = None) -> dict | None:
         """Answer without a provider response; the response hash is of the gateway's own answer."""
-        if not keep_response_sha:
-            self.response_sha = _sha256(body)
+        self.response_sha = _sha256(body)
         return self._answer(outcome, status, body, extra=extra)
 
     def _answer(self, outcome: str, status: int, body: bytes, content_type: str = "application/json",
