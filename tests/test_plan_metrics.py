@@ -12,8 +12,9 @@ REP1 = EXAMPLES / "run/task-bundles/fix-pagination-off-by-one/reps/1/gateway.jso
 
 
 def test_job_timeout_covers_every_rep_using_every_attempt():
-    # 3 reps x 3 attempts x (1200 + 30 + 30 + 60) s + 600 s setup = 12480 s = 208 min
-    assert task_job_timeout_minutes(SUITE, max_probe_timeout_seconds=30) == 208
+    # 3 reps x 3 attempts x (1200 wall + 30 grace + 120 drain + 30 probe + 60 overhead) s
+    # + 600 s setup = 13560 s = 226 min
+    assert task_job_timeout_minutes(SUITE, max_probe_timeout_seconds=30) == 226
 
 
 def test_a_suite_that_cannot_fit_in_a_job_is_refused_at_planning():
@@ -33,6 +34,19 @@ def test_usage_and_cost_from_gateway_records():
     uncached = usage["input_tokens"] - usage["cached_input_tokens"]
     expected = -(-(uncached * 100000 + usage["cached_input_tokens"] * 10000 + usage["output_tokens"] * 300000) // 10**6)
     assert cost_micros(usage, prices) == expected
+
+
+def test_locally_answered_requests_are_not_model_calls():
+    records = [json.loads(line) for line in REP1.read_text().splitlines()]
+    local = dict(records[-1], outcome="budget_exhausted", upstream_attempts=0, duration_ms=1,
+                 usage={"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0},
+                 tool_calls={"count": 0, "arguments_valid_json": 0})
+    with_local = rep_usage(records + [local])
+    assert with_local["model_calls"] == rep_usage(records)["model_calls"] == 6
+    assert with_local["model_ms"] == rep_usage(records)["model_ms"]
+    unknown = dict(local, outcome="usage_unknown", upstream_attempts=1, http_status=504)
+    with_unknown = rep_usage(records + [unknown])
+    assert with_unknown["model_calls"] == 7 and with_unknown["usage_unknown"] == 1
 
 
 def test_cost_rounds_up_to_whole_micro_dollars():

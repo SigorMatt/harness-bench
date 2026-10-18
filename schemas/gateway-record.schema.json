@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:hb:schema:gateway-record:1",
   "title": "Gateway record (one line of reps/<n>/gateway.jsonl)",
-  "description": "One record per request the harness sent. The gateway has a single upstream and always forwards to the pinned model. Request and response bodies are stored only as hashes.",
+  "description": "One record per POST whose request line and headers parse (GET /v1/models is answered locally and not recorded). The gateway has a single upstream and always forwards to the pinned model. Request and response bodies are stored only as hashes.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "seq", "started_at_ms", "duration_ms", "outcome", "http_status", "upstream_attempts", "stream", "model_rewritten", "usage", "finish_reason", "tool_calls", "request_sha256", "response_sha256", "totals"],
@@ -11,6 +11,7 @@
       "const": "hb/gateway-record/1"
     },
     "seq": {
+      "description": "Assigned in arrival order. Records are appended when a request completes, so with concurrent requests the file is not sorted by seq.",
       "$ref": "urn:hb:schema:common:1#/$defs/uint"
     },
     "started_at_ms": {
@@ -20,16 +21,17 @@
       "$ref": "urn:hb:schema:common:1#/$defs/uint"
     },
     "outcome": {
-      "description": "ok: answered by the model. upstream_rejected: the provider refused the request (for example, context too long). budget_exhausted: refused by the gateway because the rep's budget is spent. bad_request: not a valid chat-completions request.",
-      "enum": ["ok", "upstream_rejected", "budget_exhausted", "bad_request"]
+      "description": "ok: answered by the model and counted. upstream_rejected: the provider answered 400, 413 or 422 (for example, context too long); passed through, the attempt goes on. budget_exhausted: answered by the gateway because the rep's budget is spent. bad_request: never forwarded, because the request was invalid, could not be handled before admission, or was still unadmitted at shutdown. usage_unknown: forwarded, but the gateway stopped waiting before the provider answered (no response within the read timeout after sending, answered 504; or still in flight when the shutdown drain ended); the provider may have billed tokens that are not in usage or totals; the attempt goes on. upstream_failed: a provider-side or setup failure (retries exhausted, 401/403/404 or another unexpected status, a broken stream, usage that cannot be counted, a gateway fault after admission); the attempt is void, later chat requests are answered locally with this outcome, and the toolkit re-runs the attempt. Sealed bundles contain no upstream_failed records.",
+      "enum": ["ok", "upstream_rejected", "budget_exhausted", "bad_request", "usage_unknown", "upstream_failed"]
     },
     "http_status": {
+      "description": "The status the gateway returned to the harness; 503 for a request abandoned at shutdown before any answer was sent.",
       "type": "integer",
       "minimum": 100,
       "maximum": 599
     },
     "upstream_attempts": {
-      "description": "1 + transparent retries of upstream 5xx, 429 or transport errors. 0 when the gateway answered without contacting the provider.",
+      "description": "1 + transparent retries (connection failures, connections closed without a response, 408, 429, 5xx). 0 when the gateway answered without contacting the provider.",
       "type": "integer",
       "minimum": 0,
       "maximum": 6
@@ -76,13 +78,15 @@
       }
     },
     "request_sha256": {
+      "description": "Hash of the bytes sent to the provider, or of the bytes received from the harness when nothing was sent.",
       "$ref": "urn:hb:schema:common:1#/$defs/digest"
     },
     "response_sha256": {
+      "description": "Hash of the bytes received from the provider in the final attempt (before any usage-only chunk was removed), or of the gateway's own answer when nothing was forwarded. The hash of empty input when a forwarded request received no response.",
       "$ref": "urn:hb:schema:common:1#/$defs/digest"
     },
     "totals": {
-      "description": "Rep-wide counters after this request, as the gateway used them for budget enforcement.",
+      "description": "Rep-wide counters as the gateway used them for budget enforcement, taken after this request's own usage was counted and before its answer was complete. With concurrent requests they can include other requests.",
       "type": "object",
       "additionalProperties": false,
       "required": ["tokens", "calls"],

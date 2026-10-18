@@ -14,10 +14,11 @@ v1 is deliberately narrow:
   by observation checks that never enter the harness's or the probe's sandbox.
 - **One track:** stock harness configuration, only the model endpoint changed.
 
-**Status: protocol skeleton.** This repository contains the result-bundle spec,
-JSON schemas, a tested reference library, a generated example run and workflow
-skeletons. Not yet built: the toolkit image (orchestrator, gateway, sandboxed
-grader), the suite content and the results site.
+**Status: protocol skeleton plus the model gateway.** This repository contains
+the result-bundle spec, JSON schemas, a tested reference library, the model
+gateway (`hb/gateway.py`), a generated example run and workflow skeletons. Not
+yet built: the toolkit image (orchestrator, sandboxed grader), the suite content
+and the results site.
 
 ## How results stay fair
 
@@ -31,7 +32,7 @@ signatures, compares values for equality and recomputes. See
 ```
 docs/spec/result-bundle.md   the spec
 schemas/                     JSON Schemas (draft 2020-12)
-hb/                          reference library (pure functions)
+hb/                          reference library (pure functions) and the model gateway
 examples/                    a suite with one task, a registry, and a generated run
 scripts/make_examples.py     regenerates examples; --check fails if they are stale
 tests/                       functional tests
