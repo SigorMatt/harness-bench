@@ -687,7 +687,8 @@ class Exchange:
             if len(data) < size:
                 raise BadRequest(400, "the body ended early")
             parts.append(data)
-            self.h.rfile.readline(8)  # the CRLF after each chunk
+            if self.h.rfile.readline(3) not in (b"\r\n", b"\n"):  # the line break after each chunk
+                raise BadRequest(400, "invalid chunked body")
 
     # -- upstream side
 

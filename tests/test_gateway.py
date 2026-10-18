@@ -675,6 +675,9 @@ def test_malformed_requests_never_reach_the_provider_or_void_the_attempt(stub, m
     (b"POST /v1/chat/completions HTTP/1.1\r\nHost: g\r\nContent-Length: \xb2\r\n\r\n", 400),
     (b"POST /v1/chat/completions HTTP/1.1\r\nHost: g\r\nTransfer-Encoding: gzip\r\n\r\n", 400),
     (b"POST /v1/chat/completions HTTP/1.1\r\nHost: g\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n", 400),
+    # a valid JSON object in a chunk followed by something other than the line break
+    (b"POST /v1/chat/completions HTTP/1.1\r\nHost: g\r\nTransfer-Encoding: chunked\r\n\r\n"
+     b"2\r\n{}XX\r\n0\r\n\r\n", 400),
 ])
 def test_bad_framing_is_a_bad_request(stub, make_gateway, head, status):
     gw = make_gateway()
