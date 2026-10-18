@@ -13,7 +13,7 @@ from hb.tree import materialize
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 SUITE = json.loads((EXAMPLES / "suite/suite.json").read_text())
 TASK_DIR = EXAMPLES / "suite/tasks/fix-pagination-off-by-one"
-TOOLKIT = "ghcr.io/owner/hb-toolkit@sha256:" + "d" * 64
+TOOLKIT = "ghcr.io/sigormatt/hb-toolkit@sha256:" + "d" * 64
 
 
 @pytest.mark.parametrize("a,b,expected", [

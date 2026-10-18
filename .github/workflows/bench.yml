@@ -1,7 +1,7 @@
 # Reusable benchmark workflow (skeleton).
 #
 # Submitters call it from their own public repository, pinned to a release commit:
-#   uses: OWNER/harnessbench/.github/workflows/bench.yml@<release-commit-sha>
+#   uses: SigorMatt/harness-bench/.github/workflows/bench.yml@<release-commit-sha>
 #
 # Everything this workflow executes is pinned by digest below, and every
 # artifact it produces is attested. The attestation's signer digest is this
@@ -29,8 +29,8 @@ permissions:
 
 env:
   # Release pins. Changing any of these is a new release (and a new signer commit).
-  HB_TOOLKIT_IMAGE: ghcr.io/owner/hb-toolkit@sha256:0000000000000000000000000000000000000000000000000000000000000000
-  HB_SUITE_IMAGE: ghcr.io/owner/hb-suite-py-maint@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  HB_TOOLKIT_IMAGE: ghcr.io/sigormatt/hb-toolkit@sha256:0000000000000000000000000000000000000000000000000000000000000000
+  HB_SUITE_IMAGE: ghcr.io/sigormatt/hb-suite-py-maint@sha256:0000000000000000000000000000000000000000000000000000000000000000
 
 jobs:
   plan:

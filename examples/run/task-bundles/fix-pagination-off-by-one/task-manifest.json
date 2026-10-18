@@ -15,8 +15,8 @@
     },
     {
       "path": "reps/1/grade.json",
-      "sha256": "sha256:f173fa7d1c4ce891d6c660d4908535c02a29ca7274dd0058891ce0e826292fe2",
-      "size": 536
+      "sha256": "sha256:1a8f82d4b033a01bbf9c24e90a62be4a197b7daae38704eec69bbe0caeb21ba1",
+      "size": 540
     },
     {
       "path": "reps/1/harness.log",
@@ -25,8 +25,8 @@
     },
     {
       "path": "reps/1/lifecycle.json",
-      "sha256": "sha256:99856e0d8fd19a07b6adb1a5a4a8a182d4ecc610132b7c289ec3e036697f6f87",
-      "size": 343
+      "sha256": "sha256:f6f7d660f9bd87bc3f74275ead4e6bdc42ed355c456fc34719033f00297e4db6",
+      "size": 347
     },
     {
       "path": "reps/1/workspace.patch",
@@ -40,8 +40,8 @@
     },
     {
       "path": "reps/2/grade.json",
-      "sha256": "sha256:cac33e99e30cb897e9e8b6f4ad6d9cb4c0077c38310a0598bcbddd1f7cba1fa3",
-      "size": 536
+      "sha256": "sha256:6eb0f721bbc617a41da0b56b254d5afaa5436f62097fd741daeda1c27ef5b96e",
+      "size": 540
     },
     {
       "path": "reps/2/harness.log",
@@ -50,8 +50,8 @@
     },
     {
       "path": "reps/2/lifecycle.json",
-      "sha256": "sha256:0b52e8eb164d1db58af53975c899314563e01563a402aa72c188a69c71659c67",
-      "size": 343
+      "sha256": "sha256:0b610fb02ae305c8a99b2d52eb8925ffaacc53ede0f5781b51565ab914eee869",
+      "size": 347
     },
     {
       "path": "reps/2/workspace.patch",
@@ -65,8 +65,8 @@
     },
     {
       "path": "reps/3/grade.json",
-      "sha256": "sha256:7acd0aa618e0627420e3f901f64c4186c96b3f4f9e93db7a2b6db1f83b4d5e69",
-      "size": 537
+      "sha256": "sha256:922aaa7885239bf3b374ebf25052a6c6df01d9880dd47eb589876300574fbabd",
+      "size": 541
     },
     {
       "path": "reps/3/harness.log",
@@ -75,8 +75,8 @@
     },
     {
       "path": "reps/3/lifecycle.json",
-      "sha256": "sha256:85f5e7a6a261f750ec7a98f79dbf1ab9c6f295d6c6c04d661ae85ab36f086352",
-      "size": 351
+      "sha256": "sha256:ea311b3f2365c2617f71b156d89f0cee520ef997b045c1bdad2f93b7c5553259",
+      "size": 355
     },
     {
       "path": "reps/3/workspace.patch",

@@ -22,7 +22,7 @@ jobs:
     permissions:
       contents: read
     env:
-      HB_TOOLKIT_IMAGE: ghcr.io/owner/hb-toolkit@sha256:0000000000000000000000000000000000000000000000000000000000000000
+      HB_TOOLKIT_IMAGE: ghcr.io/sigormatt/hb-toolkit@sha256:0000000000000000000000000000000000000000000000000000000000000000
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

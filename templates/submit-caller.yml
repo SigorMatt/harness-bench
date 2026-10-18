@@ -23,7 +23,7 @@ jobs:
   bench:
     # Pin to a release commit, never a branch: results are only accepted from
     # the signer commits listed in the results repository's release table.
-    uses: OWNER/harnessbench/.github/workflows/bench.yml@0000000000000000000000000000000000000000
+    uses: SigorMatt/harness-bench/.github/workflows/bench.yml@0000000000000000000000000000000000000000
     with:
       harness_id: ${{ inputs.harness_id }}
     secrets:

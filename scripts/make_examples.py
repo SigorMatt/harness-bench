@@ -32,9 +32,9 @@ from hb.manifest import MANIFEST_NAME, build_task_manifest, pack_bundle, tree_di
 EXAMPLES = ROOT / "examples"
 DERIVED = ("cohort.json", "entry.json", "release.json", "run")
 
-TOOLKIT_IMAGE = "ghcr.io/owner/hb-toolkit@sha256:de1c3876583de809d67dab8a38fc05fe7c669e7f511b6a383eca295cb8420abe"
-SUITE_IMAGE = "ghcr.io/owner/hb-suite-py-maint@sha256:cd81d58c20a810329cb37daac6035921d3efc80c1cf0bf83e4bb2d95f110a9a2"
-SIGNER_WORKFLOW = "OWNER/harnessbench/.github/workflows/bench.yml"
+TOOLKIT_IMAGE = "ghcr.io/sigormatt/hb-toolkit@sha256:de1c3876583de809d67dab8a38fc05fe7c669e7f511b6a383eca295cb8420abe"
+SUITE_IMAGE = "ghcr.io/sigormatt/hb-suite-py-maint@sha256:cd81d58c20a810329cb37daac6035921d3efc80c1cf0bf83e4bb2d95f110a9a2"
+SIGNER_WORKFLOW = "SigorMatt/harness-bench/.github/workflows/bench.yml"
 SIGNER_SHA = hashlib.sha1(b"example:release").hexdigest()
 RUN = {"repository": "example-user/hb-runs", "run_id": 18000000001, "run_attempt": 1}
 HARNESS_ID = "baseline"

@@ -2,7 +2,7 @@
   "schema": "hb/grade/1",
   "task_id": "fix-pagination-off-by-one",
   "rep": 3,
-  "grader_image": "ghcr.io/owner/hb-toolkit@sha256:de1c3876583de809d67dab8a38fc05fe7c669e7f511b6a383eca295cb8420abe",
+  "grader_image": "ghcr.io/sigormatt/hb-toolkit@sha256:de1c3876583de809d67dab8a38fc05fe7c669e7f511b6a383eca295cb8420abe",
   "resolved": false,
   "target": {
     "passed": 2,

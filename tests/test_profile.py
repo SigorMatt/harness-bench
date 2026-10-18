@@ -9,8 +9,8 @@ from hb import profile
 EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 COHORT = json.loads((EXAMPLES / "cohort.json").read_text())
 NAMES = profile.rep_names("fix-pagination-off-by-one", 1, 1)
-IMAGE = "ghcr.io/owner/hb-harness-baseline@sha256:" + "4" * 64
-TOOLKIT = "ghcr.io/owner/hb-toolkit@sha256:" + "d" * 64
+IMAGE = "ghcr.io/sigormatt/hb-harness-baseline@sha256:" + "4" * 64
+TOOLKIT = "ghcr.io/sigormatt/hb-toolkit@sha256:" + "d" * 64
 
 
 def flag_values(args, flag):
