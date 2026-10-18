@@ -512,8 +512,10 @@ class Exchange:
         self.stream_state = None
         self.upstream_conn = None
         self.abandoned = False
+        self.decided = None  # the record, once the answer is decided
         self._done = False
-        self._done_lock = threading.Lock()
+        # Admission, counting, voiding, deciding the answer and abandoning exclude each other.
+        self._lock = threading.Lock()
 
     # -- lifecycle
 
@@ -534,31 +536,33 @@ class Exchange:
             self.gw.unregister(self)
 
     def abandon(self) -> None:
-        """Shutdown reached this request before it finished. Record it now; never void."""
-        with self._done_lock:
+        """Shutdown reached this request before it finished. Record it now; never void.
+
+        An answer already decided (a void included) keeps its record. Otherwise the
+        record holds exactly the usage counted so far. From here on nothing more is
+        counted, voided or sent upstream for this request.
+        """
+        with self._lock:
             if self._done:
                 return
             self._done = True
             self.abandoned = True
-            admitted = self.admitted
-        conn = self.upstream_conn
-        if conn is not None and conn.sock is not None:
-            try:
-                conn.sock.shutdown(socket.SHUT_RDWR)  # unblocks a pending read; the exchange then stops
-            except OSError:
-                pass
-        status = self.status_sent or 503
-        if not admitted:
-            record = self._record("bad_request", status)
-        else:
-            state = self.stream_state
-            finish, tools = (state.finish_reason(), state.tool_calls()) if state else ("none", (0, 0))
-            outcome = "ok" if self.counted_usage is not None else "usage_unknown"
-            record = self._record(outcome, status, self.counted_usage, finish, tools)
+            conn = self.upstream_conn
+            if conn is not None and conn.sock is not None:
+                try:
+                    conn.sock.shutdown(socket.SHUT_RDWR)  # nothing more is sent; a pending read is unblocked
+                except OSError:
+                    pass
+            if self.decided is not None:
+                record = self.decided
+            elif not self.admitted:
+                record = self._record("bad_request", self.status_sent or 503)
+            else:
+                record = self._unanswered(self.status_sent or 503)
         self.gw.write_record(record)
 
     def _finish(self, record: dict) -> None:
-        with self._done_lock:
+        with self._lock:
             if self._done:
                 return
             self._done = True
@@ -571,7 +575,7 @@ class Exchange:
             return None
         if not self.admitted:
             if self.status_sent is not None:
-                return self._record("bad_request", self.status_sent)
+                return self._decide("bad_request", self.status_sent)
             return self._local(400, "bad_request", _error_body("bad_request", "the gateway could not handle this"))
         state = self.stream_state
         if state is None:
@@ -591,7 +595,7 @@ class Exchange:
             kind = "not_found" if exc.status == 404 else "bad_request"
             return self._local(exc.status, "bad_request", _error_body(kind, str(exc)))
 
-        with self._done_lock:  # admission and abandonment exclude each other
+        with self._lock:
             if self._done:
                 return None
             decision = self.gw.ledger.admit()
@@ -725,11 +729,17 @@ class Exchange:
         while not self.abandoned:
             self.attempts += 1
             conn = self.gw.connection()
-            self.upstream_conn = conn
             sent = False
             try:
                 conn.connect()
                 conn.sock.settimeout(cfg.read_timeout_s)
+                with self._lock:  # abandon() either came first, or sees this socket and shuts it
+                    if self.abandoned:
+                        conn.close()
+                        return None, None, "failed"
+                    self.upstream_conn = conn
+                # If request() fails, the body never fully left, so the provider cannot hold
+                # a complete request and retrying is safe.
                 conn.request("POST", cfg.upstream.chat_path, body=payload, headers=self.gw.upstream_headers())
                 sent = True
                 resp = conn.getresponse()
@@ -785,11 +795,13 @@ class Exchange:
         try:
             for raw, data in iter_sse_events(resp, digest.update):
                 if data is not None and data != "[DONE]":
-                    usage_only = state.feed(_loads(data))
-                    if usage_only and state.usage is not None and self.counted_usage is None:
-                        # Counted, and totals taken, before [DONE] reaches the client.
-                        self._count(state.usage)
-                        totals = self.gw.ledger.totals()
+                    chunk = _loads(data)
+                    with self._lock:  # abandon() reads the stream state
+                        usage_only = state.feed(chunk)
+                        if usage_only and state.usage is not None and self.counted_usage is None:
+                            # Counted, and totals taken, before [DONE] reaches the client.
+                            self._count_locked(state.usage)
+                            totals = self.gw.ledger.totals()
                     if usage_only and not client_wants_usage:
                         continue
                 if self.status_sent is None:
@@ -809,31 +821,57 @@ class Exchange:
             totals = self.gw.ledger.totals()
         if self.status_sent is None:
             self._start_stream(resp)
-        return self._record("ok", 200, self.counted_usage, state.finish_reason(), state.tool_calls(), totals)
+        return self._decide("ok", 200, self.counted_usage, state.finish_reason(), state.tool_calls(), totals)
 
     # -- results
 
     def _count(self, usage: dict) -> None:
+        with self._lock:
+            self._count_locked(usage)
+
+    def _count_locked(self, usage: dict) -> None:
         """Count a request's usage once. The record reports exactly what was counted."""
         if self.counted_usage is None and not self.abandoned:
             self.gw.ledger.add_tokens(usage)
             self.counted_usage = usage
 
+    def _decide(self, outcome: str, http_status: int, usage=None, finish="none", tools=(0, 0),
+                totals: dict | None = None, void: bool = False) -> dict | None:
+        """Fix this request's record, unless shutdown abandoned it first.
+
+        A void and the counting of usage already known happen in the same step,
+        so shutdown either keeps them or prevents them.
+        """
+        with self._lock:
+            if self.abandoned:
+                return None
+            if void:
+                self.gw.ledger.mark_void()
+                if usage is not None:
+                    self._count_locked(usage)
+                usage = self.counted_usage
+            self.decided = self._record(outcome, http_status, usage, finish, tools, totals)
+            return self.decided
+
+    def _unanswered(self, http_status: int) -> dict:
+        """The record of an admitted request the gateway stopped waiting for: ok if its
+        usage was already counted, else usage_unknown. Called with the lock held."""
+        state = self.stream_state
+        finish, tools = (state.finish_reason(), state.tool_calls()) if state else ("none", (0, 0))
+        outcome = "ok" if self.counted_usage is not None else "usage_unknown"
+        return self._record(outcome, http_status, self.counted_usage, finish, tools)
+
     def _fail(self, usage=None, finish="none", tools=(0, 0), client_ok=True) -> dict | None:
         """Void the attempt. Usage already known is still counted, before anything is sent."""
-        if self.abandoned:
+        record = self._decide("upstream_failed", self.status_sent or 502, usage, finish, tools, void=True)
+        if record is None:
             return None
-        self.gw.ledger.mark_void()
-        if usage is not None:
-            self._count(usage)
         if self.status_sent is None:
-            return self._answer("upstream_failed", 502,
-                                _error_body("upstream_failed", "the provider failed or could not be accounted for"),
-                                usage=self.counted_usage, finish=finish, tools=tools,
-                                extra={"x-should-retry": "false"})
+            self._send(502, _error_body("upstream_failed", "the provider failed or could not be accounted for"),
+                       extra={"x-should-retry": "false"})
+            return record
         # Mid-stream: the client already has a 200. The record is complete before the
         # error event goes out, so a client reacting to it sees the void.
-        record = self._record("upstream_failed", self.status_sent, self.counted_usage, finish, tools)
         if self.stream and client_ok:
             # An error event makes standard OpenAI clients raise instead of taking
             # the cut-off answer as complete.
@@ -849,9 +887,10 @@ class Exchange:
 
     def _answer(self, outcome: str, status: int, body: bytes, content_type: str = "application/json",
                 usage=None, finish="none", tools=(0, 0), extra: dict | None = None) -> dict:
-        """Build the record first, then send: totals must not include the client's next request."""
-        record = self._record(outcome, status, usage, finish, tools)
-        self._send(status, body, content_type, extra)
+        """Decide the record first, then send: totals must not include the client's next request."""
+        record = self._decide(outcome, status, usage, finish, tools)
+        if record is not None:
+            self._send(status, body, content_type, extra)
         return record
 
     def _send(self, status: int, body: bytes, content_type: str = "application/json", extra: dict | None = None):

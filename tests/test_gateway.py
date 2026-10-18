@@ -744,6 +744,83 @@ def test_shutdown_does_not_void_a_request_that_was_never_admitted(stub, make_gat
     assert stub.requests == [] and not gw.gateway.ledger.void
 
 
+def drain_now(gw):
+    """Run the shutdown drain on its own thread, as the signal handler would, and wait for it."""
+    thread = threading.Thread(target=gw.gateway.drain, args=(0,))
+    thread.start()
+    thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("status,outcome", [(401, "upstream_failed"), (400, "upstream_rejected")])
+def test_shutdown_keeps_an_answer_already_decided(stub, make_gateway, monkeypatch, status, outcome):
+    gw = make_gateway()
+    stub.push(("json", status, {"error": "no"}))
+    original = gateway.Exchange._send
+
+    def slow_client(self, *args, **kwargs):
+        drain_now(gw)  # the drain ends while the decided answer is still being sent
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(gateway.Exchange, "_send", slow_client)
+    worker, _ = background_request(gw, body=CHAT)
+    worker.join()
+
+    [line] = gw.lines()
+    record = json.loads(line)
+    validate("gateway-record", record)
+    assert record["outcome"] == outcome and record["http_status"] == (502 if status == 401 else status)
+    assert gw.gateway.ledger.void is (outcome == "upstream_failed")
+
+
+def test_shutdown_records_exactly_the_usage_counted(stub, make_gateway, monkeypatch):
+    gw = make_gateway()
+    stub.push(("json", 200, completion(prompt=100, completion_tokens=20)))
+    original = gateway.Ledger.add_tokens
+
+    def add_tokens(self, usage):
+        drain = threading.Thread(target=gw.gateway.drain, args=(0,))
+        drain.start()  # shutdown arrives while the usage is being counted
+        time.sleep(0.2)
+        original(self, usage)
+
+    monkeypatch.setattr(gateway.Ledger, "add_tokens", add_tokens)
+    worker, _ = background_request(gw, body=CHAT)
+    worker.join()
+
+    assert wait_for(lambda: len(gw.lines()) == 1)
+    record = json.loads(gw.lines()[0])
+    validate("gateway-record", record)
+    assert record["outcome"] == "ok" and record["http_status"] == 503
+    assert record["usage"]["input_tokens"] + record["usage"]["output_tokens"] == 120
+    assert gw.gateway.ledger.totals()["tokens"] == 120
+
+
+def test_nothing_is_sent_upstream_once_a_request_is_abandoned(stub, make_gateway, monkeypatch):
+    gw = make_gateway()
+    stub.push(("json", 200, completion()))
+    original = gateway.Gateway.connection
+
+    def connection(self):
+        conn = original(self)
+        connect = conn.connect
+
+        def connect_during_shutdown():
+            drain_now(gw)  # the drain ends while the upstream connection is being opened
+            connect()
+
+        conn.connect = connect_during_shutdown
+        return conn
+
+    monkeypatch.setattr(gateway.Gateway, "connection", connection)
+    worker, _ = background_request(gw, body=CHAT)
+    worker.join()
+
+    [line] = gw.lines()
+    record = json.loads(line)
+    assert record["outcome"] == "usage_unknown" and record["http_status"] == 503
+    assert stub.requests == [] and not gw.gateway.ledger.void
+
+
 def test_a_harness_that_stops_sending_gets_a_408(stub, make_gateway):
     gw = make_gateway(client_timeout_s=0.3)
     with socket.create_connection(("127.0.0.1", gw.port), timeout=10) as sock:
