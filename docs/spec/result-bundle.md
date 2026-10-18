@@ -40,7 +40,7 @@ bounds it (§10) instead of adding detection.
 | I7 | Scores are derived, never declared. | The aggregator re-grades every rep from its patch. The `grade.json` inside a bundle is advisory. |
 | I8 | The code under test cannot decide its own verdict. | Probes run next to the patched code and only emit observations. Expected values and the comparison stay in the trusted grader process (§7). |
 | I9 | Edits to tests and interpreter hook files cannot make a rep pass. | Protected paths are restored from pristine before probing. The edits still count as edits: out of scope wherever the task's scope excludes them. |
-| I10 | A result is one complete, first-attempt run, accepted once, under the identity it was submitted as. | The seal job runs only if every task job succeeded. Acceptance requires the signed run identity to equal the submitted repository and run id, `run_attempt = 1` and the full task list, and deduplicates on (repository, run id). Infra re-runs are triggered only by the gateway's upstream-error classification, inside the job, and are capped per rep and per run. |
+| I10 | A result is one complete, first-attempt run, accepted once, under the identity it was submitted as. | The seal job runs only if every task job succeeded. Acceptance requires the signed run identity to equal the submitted repository and run id, `run_attempt = 1` and the full task list, and deduplicates on (repository, run id). Infra re-runs happen only when the gateway voids an attempt, and it voids only on provider-side or setup failures, never on anything that depends only on the harness's own behaviour (§5.2). Re-runs run inside the job and are capped per rep and per run. |
 | I11 | Identifiers cannot disagree with content. | IDs are `content_id()` of canonical JSON (§3.1) and are always recomputed, never accepted as claims. |
 | I12 | Known caches are never counted as edits. | The suite's `ignore_paths` (bytecode, test-runner caches) are dropped when the workspace is snapshotted and again when a patch is applied. Anything else left in `/workspace` is part of the patch, so the adapter contract keeps harness state under `$HOME` (§6). |
 
@@ -162,7 +162,7 @@ size of its bundle archive ([`schemas/run-manifest.schema.json`](../../schemas/r
 ### 5.1 `lifecycle.json`
 
 `termination` is one of `exited`, `wall_timeout` or `budget_exhausted`. There is
-no infra-error value: an attempt that hits an upstream error is re-run with a
+no infra-error value: an attempt the gateway voided (§5.2) is re-run with a
 fresh network, gateway and workspace, up to `infra.max_reruns_per_rep` times, or
 the job fails. Sealed bundles therefore cannot contain one. `attempts` records
 how many attempts the rep took. The task job's timeout is derived from the suite
@@ -171,28 +171,129 @@ fits, and a suite that cannot fit in a GitHub-hosted job fails at planning.
 
 ### 5.2 `gateway.jsonl`
 
-One record per request the harness sent. Request and response bodies are stored
-only as hashes. Main fields:
+Written by the gateway ([`hb/gateway.py`](../../hb/gateway.py)): one record per
+POST whose request line and headers parse. Requests the HTTP layer rejects
+earlier (400, 414, 431) never reach the gateway's logic or the provider and are
+not recorded. Request and response bodies are stored only as hashes. Main
+fields:
 
-- `outcome`: `ok`, `upstream_rejected` (for example, context too long), `budget_exhausted` or `bad_request`
-- `upstream_attempts`: 1 plus transparent retries of upstream 5xx, 429 and transport errors
+- `outcome`: `ok`, `upstream_rejected` (the provider answered 400, 413 or 422, for example context too long), `budget_exhausted`, `bad_request`, `usage_unknown` or `upstream_failed`
+- `upstream_attempts`: 1 plus transparent retries; 0 when the gateway answered without contacting the provider
 - `usage`: input tokens (including cached), cached input tokens, output tokens
 - `tool_calls`: count, and how many had arguments that parse as a JSON object
-- `model_rewritten`, `stream`, `finish_reason`, and running `totals`
+- `model_rewritten`, `stream`, `finish_reason`, `http_status` (as returned to the harness) and running `totals`
 
-The gateway changes requests in exactly two fixed ways:
+**Endpoints and checks.** `POST /v1/chat/completions` (a trailing slash is
+accepted) is the only request that reaches the provider. `GET /v1/models` and
+`GET /v1/models/<pinned id>` are answered locally with the pinned model only and
+are not recorded. A POST is checked in this order, and the first failing check
+answers it as `bad_request`: body framing (411 without a Content-Length or
+chunked body, 413 over 32 MiB, 408 if the body stops arriving for the client
+timeout of 60 seconds, 400 for invalid framing), path (404), JSON object (400).
+These checks also answer requests that arrive after a void. Every problem found
+before a request is admitted, including a fault in the gateway itself, is
+answered as `bad_request` and leaves the attempt running. Request bodies are
+re-encoded with ASCII escapes, so any valid JSON string, including a lone
+surrogate from a string cut in the middle of an emoji, is forwarded faithfully.
+
+**What reaches the provider.** The gateway changes requests in exactly two fixed ways:
 
 1. `model` is set to the pinned model id.
 2. Streaming requests get `stream_options.include_usage = true`, so usage is
    always counted. If the client did not ask for it, the usage-only chunk is
    removed from what the client receives.
 
-**Budgets.** Once `totals` reaches the rep's token or call budget, further
-requests get HTTP 429 with outcome `budget_exhausted`. The toolkit then ends the
-rep after a 30-second grace period.
+The upstream request carries a fixed header set: the real API key, content type,
+accept and user agent. No header from the harness is forwarded, and the real key
+never reaches the harness. Plain http is accepted only for a loopback upstream
+(test stubs).
+
+**Budgets.** Each request is admitted only while `totals` is below the rep's
+token and call budgets; the call is counted at admission. After that, requests
+are answered locally with HTTP 429, error type `budget_exhausted`, code
+`insufficient_quota` and `x-should-retry: false` (so standard OpenAI clients do
+not retry), and recorded as `budget_exhausted`. A request already in flight when
+the token budget is crossed completes, so the overshoot is bounded by the
+number of concurrent requests. The toolkit then ends the rep after a 30-second
+grace period.
+
+**Provider failures.** Retries happen only before any byte has reached the
+client and only when the provider cannot still be working on the request:
+connection and TLS failures, a connection closed without any response, and
+408, 429 and 5xx answers. They use exponential backoff, honouring
+`retry-after-ms` or `Retry-After` (seconds or an HTTP date), capped at 30
+seconds, up to `infra.upstream_retries` times. A timeout after the request was
+sent is not retried, because the provider may still be generating, and billing,
+an answer the gateway would never count.
+
+**Void attempts are a re-roll, so only provider-side and setup failures void.**
+A void re-runs the rep. If anything that depends only on the harness's own
+behaviour could void, a harness could re-roll reps that were going badly. The
+attempt becomes void, recorded as `upstream_failed`, when:
+
+- retries run out;
+- the provider answers with any status other than 200, 400, 413, 422 or a retryable one — 401, 403 and 404 mean the key, model id or base URL is wrong, which is a setup fault, not a harness result;
+- a stream breaks off (the connection fails or closes early; a read timeout is `usage_unknown` instead), or a response carries no usage the gateway can count;
+- the gateway itself faults after admitting a request;
+- a record cannot be written. The gateway then stops and exits with status 1.
+
+**`usage_unknown`: the gateway stopped waiting, and the attempt goes on.** A
+forwarded request is recorded as `usage_unknown` when the gateway stops waiting
+for it:
+
+- the provider sends nothing for the read timeout (600 seconds) at any point
+  after the request was sent: before the response headers, in the middle of a
+  response body, or between stream events. It is never retried. If nothing has
+  been sent to the harness yet, the answer is a 504; a stream that has already
+  started ends with a `data: {"error": …}` event of type `upstream_timeout`;
+- it is still in flight when the gateway shuts down after its drain period
+  (120 seconds).
+
+Both depend on what the harness asked for and when it exited, so neither voids.
+The record holds exactly the usage counted, which is zero unless a stream's
+usage had already been counted; in that case the record is `ok`. The provider
+may have billed tokens that the record cannot show; the leaderboard shows the
+count of these requests next to the token totals (§10).
+
+**Shutdown.** On SIGTERM the gateway stops accepting connections and waits up to
+the drain period for requests in flight. It then refuses new requests (503, not
+recorded, since they never reach the provider) and records the rest. A request
+whose answer was already decided keeps that record and is still sent that
+answer, so a void already declared stays `upstream_failed`. Otherwise the record is `usage_unknown` if the request
+was admitted (or `ok`, if a stream's usage was already counted), and
+`bad_request` (HTTP 503) if not. Counting usage, voiding, deciding an answer and
+abandoning a request exclude each other, so the record holds exactly the usage
+the totals counted. The gateway closes their upstream connections, cuts any
+retry backoff short and never sends an abandoned request upstream, so nothing
+more reaches the provider for them. The orchestrator must stop the gateway with a timeout longer than the
+drain period.
+
+From then on the gateway answers every chat request that passes the checks
+locally (HTTP 502, `upstream_failed`, `upstream_attempts: 0`,
+`x-should-retry: false`). A stream that fails after it has started ends with a
+`data: {"error": …}` event, so standard OpenAI clients raise instead of taking
+the cut-off answer as complete. The void and the record are in place before that
+event is sent, so a client that reacts to it is answered locally. Stream headers are sent only with the first
+event, so a stream that fails before producing anything gets a plain 502. The
+toolkit ends a void attempt and re-runs it under §5.1 (it also treats a
+non-zero gateway exit status as a void), so sealed bundles contain no
+`upstream_failed` records.
+
+Provider rejections (`upstream_rejected`) are passed through unchanged and do
+not void the attempt: reacting to them, for example by compacting context, is
+part of what the harness is measured on.
+
+**Accounting.** A stream's usage is counted once, when its usage-only chunk
+(usage and no choices) arrives, before `[DONE]` reaches the client. If usage
+rides on a chunk that also has choices, it is counted when the stream ends. The
+record reports exactly the usage that was counted. If the client disconnects
+mid-stream, the gateway keeps reading to the end, because those tokens are
+billed anyway. A record's `totals` are taken before its answer is complete, so
+they never include the client's next request.
 
 **Derived efficiency metrics** (`hb/metrics.py`): tokens, cached share, model
-calls, tool-call parse failures, model time (sum of call durations) and
+calls (requests that reached the provider), tool-call parse failures, model
+time (time spent on those requests, including retry backoff and relaying) and
 non-model time (wall time minus model time). Cost is tokens times the dated
 price table kept in the results repository (`schemas/prices.schema.json`),
 applied at display time. Prices are deliberately not in the suite: the suite
@@ -343,8 +444,9 @@ one job with write access consumes only derived JSON.
 
 pass@1 (mean over tasks and reps), pass^k (all k reps pass), 95% confidence
 intervals from a bootstrap over tasks (paired across entries within a cohort),
-median tokens, cost and model calls, tool-call parse-failure rate, and the rates
-of protected-path restores, out-of-scope edits and infra re-runs.
+median tokens, cost and model calls, the number of `usage_unknown` requests next
+to the token figures, tool-call parse-failure rate, and the rates of
+protected-path restores, out-of-scope edits and infra re-runs.
 
 ## 10. Residual risks — stated and bounded, not detected
 
@@ -366,6 +468,20 @@ of protected-path restores, out-of-scope edits and infra re-runs.
   baseline at each release, so drift shows up as a baseline shift.
 - **Wire protocols.** Harnesses that only speak other APIs are out of v1 rather
   than translated, because translation would change what is measured.
+- **Provider errors a request can provoke.** Voids are triggered only by
+  provider-side signals, but a request's content might make a provider fail
+  (for example, a 5xx on an unusual input) and so cause a re-run. Re-runs are
+  capped per rep and per run, and the leaderboard shows each cell's re-run rate.
+- **Tokens the gateway cannot see.** A `usage_unknown` request may have been
+  billed for tokens that are not in the totals or the token budget. Each one
+  costs the harness at least the read timeout (600 seconds) of its wall-clock
+  budget, or happens after it exited. Their answers never reached the harness
+  complete: at most the start of a stream did, ended by an error event that
+  standard OpenAI clients raise on, so the harness never received a finished
+  answer from those tokens. The leaderboard
+  shows the count next to the token totals. Converting non-streaming requests to
+  streaming upstream would remove the timeout case, but it would change what
+  reaches the provider and is left for later.
 
 ## 11. Versioning
 
@@ -384,6 +500,7 @@ cohort.
 | `hb/tree.py` | materialising trees, ignore and protected paths, scope |
 | `hb/patch.py` | workspace diff and patch application outside any repository |
 | `hb/profile.py` | container profiles as data |
+| `hb/gateway.py` | model gateway: single upstream, budgets, retries, usage accounting, records |
 | `hb/plan.py` | values derived from the suite, such as the task job timeout |
 | `hb/grade.py` | observation comparison, verdict, probe runner contract, `grade_rep` |
 | `hb/metrics.py` | usage and cost from gateway records |
