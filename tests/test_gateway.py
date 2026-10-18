@@ -826,14 +826,31 @@ def test_shutdown_keeps_an_answer_already_decided(stub, make_gateway, monkeypatc
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(gateway.Exchange, "_send", slow_client)
-    worker, _ = background_request(gw, body=CHAT)
+    worker, result = background_request(gw, body=CHAT)
     worker.join()
 
     [line] = gw.lines()
     record = json.loads(line)
     validate("gateway-record", record)
     assert record["outcome"] == outcome and record["http_status"] == (502 if status == 401 else status)
+    assert result[0][0] == record["http_status"]  # the harness got the answer its record states
     assert gw.gateway.ledger.void is (outcome == "upstream_failed")
+
+
+def test_shutdown_cuts_a_retry_backoff_short_and_sends_nothing_more(stub, make_gateway):
+    gw = make_gateway(retry_base_delay_s=10.0)
+    stub.push(("drop",), ("json", 200, completion()))
+    worker, _ = background_request(gw, body=CHAT)
+    assert wait_for(lambda: len(stub.requests) == 1)
+    time.sleep(0.2)  # the exchange is now waiting out its backoff
+
+    started = time.monotonic()
+    drain_now(gw)
+    worker.join(timeout=5)
+
+    assert time.monotonic() - started < 3 and not worker.is_alive()
+    assert len(stub.requests) == 1
+    assert json.loads(gw.lines()[0])["outcome"] == "usage_unknown"
 
 
 def test_shutdown_records_exactly_the_usage_counted(stub, make_gateway, monkeypatch):

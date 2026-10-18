@@ -258,14 +258,14 @@ count of these requests next to the token totals (§10).
 **Shutdown.** On SIGTERM the gateway stops accepting connections and waits up to
 the drain period for requests in flight. It then refuses new requests (503, not
 recorded, since they never reach the provider) and records the rest. A request
-whose answer was already decided keeps that record, so a void already declared
-stays `upstream_failed`. Otherwise the record is `usage_unknown` if the request
+whose answer was already decided keeps that record and is still sent that
+answer, so a void already declared stays `upstream_failed`. Otherwise the record is `usage_unknown` if the request
 was admitted (or `ok`, if a stream's usage was already counted), and
 `bad_request` (HTTP 503) if not. Counting usage, voiding, deciding an answer and
 abandoning a request exclude each other, so the record holds exactly the usage
-the totals counted. The gateway closes their upstream connections and never
-sends an abandoned request upstream, so nothing more reaches the provider for
-them. The orchestrator must stop the gateway with a timeout longer than the
+the totals counted. The gateway closes their upstream connections, cuts any
+retry backoff short and never sends an abandoned request upstream, so nothing
+more reaches the provider for them. The orchestrator must stop the gateway with a timeout longer than the
 drain period.
 
 From then on the gateway answers every chat request that passes the checks

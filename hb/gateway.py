@@ -516,6 +516,7 @@ class Exchange:
         self.upstream_conn = None
         self.abandoned = False
         self.decided = None  # the record, once the answer is decided
+        self._abandoned_event = threading.Event()  # cuts a retry backoff short
         self._done = False
         # Admission, counting, voiding, deciding the answer and abandoning exclude each other.
         self._lock = threading.Lock()
@@ -550,6 +551,7 @@ class Exchange:
                 return
             self._done = True
             self.abandoned = True
+            self._abandoned_event.set()
             conn = self.upstream_conn
             if conn is not None and conn.sock is not None:
                 try:
@@ -749,7 +751,7 @@ class Exchange:
                     return None, None, "timeout"
                 if self.attempts > cfg.upstream_retries:
                     return None, None, "failed"
-                time.sleep(self.gw.retry_delay(self.attempts, None))
+                self._abandoned_event.wait(self.gw.retry_delay(self.attempts, None))
                 continue
             if ((resp.status in RETRYABLE_STATUSES or resp.status >= 500)
                     and self.attempts <= cfg.upstream_retries):
@@ -759,7 +761,7 @@ class Exchange:
                 except (OSError, ValueError, http.client.HTTPException):
                     pass
                 conn.close()
-                time.sleep(self.gw.retry_delay(self.attempts, requested))
+                self._abandoned_event.wait(self.gw.retry_delay(self.attempts, requested))
                 continue
             return conn, resp, None
         return None, None, "failed"
@@ -918,7 +920,7 @@ class Exchange:
         return record
 
     def _send(self, status: int, body: bytes, content_type: str = "application/json", extra: dict | None = None):
-        if self.abandoned:
+        if self.abandoned and self.decided is None:  # a decided answer is still sent, as its record says
             return
         self.status_sent = status
         try:
@@ -947,7 +949,7 @@ class Exchange:
             return False
 
     def _write(self, data: bytes) -> bool:
-        if self.abandoned:
+        if self.abandoned and self.decided is None:  # the error event that ends a decided stream still goes out
             return False
         try:
             self.h.wfile.write(data)
