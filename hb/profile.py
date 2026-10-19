@@ -32,7 +32,7 @@ HARNESS_ENV = ("HOME", "OPENAI_BASE_URL", "OPENAI_API_KEY", "HB_MODEL", "HB_TASK
 # (client, upstream, a DNS lookup). The descriptor limit is pinned well above
 # what the thread limit allows, so a flood of connections only ever meets the
 # thread limit, which turns new connections away before any request is
-# admitted, never a failed upstream connect, which would void the attempt.
+# admitted, never a failed upstream connect, which would fail the job.
 GATEWAY_MEMORY = "2048m"
 GATEWAY_PIDS = 1024
 GATEWAY_NOFILE = 8192

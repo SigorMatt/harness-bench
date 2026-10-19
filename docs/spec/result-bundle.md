@@ -237,7 +237,9 @@ honouring `retry-after-ms` or `Retry-After` (seconds or an HTTP date), capped at
 sent, nothing is retried, because the provider may already be generating, and
 billing, an answer the gateway would never count; a retry could bill twice while
 the record shows one call. A timeout is then `usage_unknown`, and a connection
-that fails or closes before any response is a void.
+that fails or closes before any response is a void. When a request would void
+and any of its attempts failed before the request was fully sent, the job fails
+instead (below).
 
 **Void attempts are a re-roll, so only provider-side and setup failures void.**
 A void re-runs the rep. If anything that depends only on the harness's own
@@ -256,6 +258,22 @@ and the usual cause, a full disk, can be brought about by the harness, so the
 toolkit does not re-run the attempt: it fails the job, and the run cannot be
 sealed. The same holds for any other non-zero exit status, for example a
 gateway killed at its memory limit (§6.1).
+
+**A provider that cannot be reached fails the job.** When a request would void
+for any of the reasons above and at least one of its attempts failed before
+the request was fully sent (the connection, the TLS handshake or the send
+failed), the gateway records and answers that request like a void, so later
+requests are answered locally. It also prints the reason and exits with status
+3, and the toolkit fails the job instead of re-running the attempt. Such
+failures can be brought about by the harness: a kernel table that every
+container on the runner shares, connection tracking, can be filled by flooding
+the gateway's address, and then new connections to the provider fail. The rule
+covers the whole request, not only retries running out, so no void ever
+follows a connection the harness could have stopped. The exit status is set
+before the record is written, so a toolkit that reacts to the record always
+finds it. The cost is that a provider that stays unreachable through all of
+one request's retries, or fails in another way after such an attempt, fails
+the whole run instead of one rep being run again.
 
 **`usage_unknown`: the gateway stopped waiting, and the attempt goes on.** A
 forwarded request is recorded as `usage_unknown` when the gateway stops waiting
@@ -375,7 +393,7 @@ docker start <harness>
   more than three times the thread limit. A flood therefore always meets the
   thread limit first, which turns new connections away before any request is
   admitted. It can never make an admitted request's upstream connection fail
-  for lack of descriptors, which would void the attempt (§5.2).
+  for lack of descriptors, which would fail the job (§5.2).
 - The harness container is created and started rather than run with `--rm`, so
   its exit status and output can be read after it stops. Its output, like the
   gateway's, is capped by the log options, so it cannot fill the runner's disk.
@@ -417,9 +435,11 @@ of one task in turn:
 
 **What fails the job.** Anything the toolkit cannot trust or finish: a Docker
 command that fails or times out, a gateway that does not start, stops while the
-harness runs or exits with a non-zero status, a malformed gateway log, a void
-on every allowed attempt, or a probe sandbox that cannot start. A harness can
-cause some of these, for example by filling the disk or by leaving more than
+harness runs or exits with a non-zero status (a record that could not be
+written, a provider that could not be reached, a kill), a malformed gateway
+log, a void on every allowed attempt, or a probe sandbox that cannot start. A
+harness can cause some of these, for example by filling the disk, by filling a
+kernel table the gateway's connections need, or by leaving more than
 the toolkit accepts: 1 GiB of files or 200,000 entries in `/workspace`, or a
 gateway log over 256 MiB. That is why they fail the job, which loses the whole
 run, instead of voiding the attempt, which would re-roll one rep. The gateway's
@@ -564,16 +584,6 @@ protected-path restores, out-of-scope edits and infra re-runs.
   shows the count next to the token totals. Converting non-streaming requests to
   streaming upstream would remove the timeout case, but it would change what
   reaches the provider and is left for later.
-- **Host-wide resources a harness can fill.** Some kernel resources are shared
-  by every container on the runner, such as the connection-tracking table
-  behind Docker's networking. A harness that floods the gateway's address with
-  packets might fill it, so that the gateway's next connection to the provider
-  fails before the request is sent and the attempt is voided. This is bounded
-  like provider errors a request can provoke: re-runs are capped per rep and
-  per run, and the leaderboard shows each cell's re-run rate. Removing it by
-  construction, by dropping every harness packet except TCP to the gateway's
-  port before it is tracked, or by failing the job instead of voiding when a
-  connection fails before the request is sent, is an open design decision.
 - **Early kills depend on reading the gateway log.** The kill on a void and the
   kill 30 seconds after the first budget refusal (§6.1) come from copying
   `gateway.jsonl` out of the gateway every 2 seconds while the harness runs.
@@ -589,9 +599,13 @@ protected-path restores, out-of-scope edits and infra re-runs.
   the slowdown; it needs a way to read part of a file in the gateway's volume
   and is left for later.
 - **Job failures a harness can cause.** A harness can make its own task job
-  fail (§6.1), for example by filling the runner's disk. That loses the whole
-  run, so it is never a way to re-roll a rep; at most it is a costly form of the
-  best-of-N whole runs above.
+  fail (§6.1), for example by filling the runner's disk, or by filling the
+  connection-tracking table every container on the runner shares so that the
+  gateway cannot reach the provider (§5.2). That loses the whole run, so it is
+  never a way to re-roll a rep; at most it is a costly form of the best-of-N
+  whole runs above. In exchange, a provider that stays unreachable through all
+  of one request's retries, or fails in another way after such an attempt,
+  fails the run too, rather than one rep being run again.
 
 ## 11. Versioning
 

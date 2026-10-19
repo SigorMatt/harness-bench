@@ -461,27 +461,126 @@ def test_a_connection_lost_after_the_full_request_is_a_void_without_a_retry(stub
     failed, local = gw.records(2)
     assert failed["outcome"] == "upstream_failed" and failed["upstream_attempts"] == 1
     assert local["outcome"] == "upstream_failed" and local["upstream_attempts"] == 0
+    assert gw.close() == gateway.EXIT_OK  # it reached the provider: a void
 
 
-def test_connection_failures_before_sending_are_retried(tmp_path):
-    with socket.socket() as placeholder:  # a port with nothing listening: every connect is refused
+def refused_port() -> int:
+    """A local port with nothing listening: every connect to it is refused."""
+    with socket.socket() as placeholder:
         placeholder.bind(("127.0.0.1", 0))
-        port = placeholder.getsockname()[1]
-    config = gateway.Config(upstream=gateway.Upstream.parse(f"http://127.0.0.1:{port}/v1/"), model=MODEL,
+        return placeholder.getsockname()[1]
+
+
+def test_a_provider_that_cannot_be_reached_fails_the_job_instead_of_voiding(tmp_path, capsys):
+    # A connect that fails before the request is sent can be the harness's doing (it can
+    # exhaust host resources the connection needs), so it must never become a re-roll.
+    config = gateway.Config(upstream=gateway.Upstream.parse(f"http://127.0.0.1:{refused_port()}/v1/"), model=MODEL,
                             api_key=KEY, max_total_tokens=1000, max_calls=10, upstream_retries=2,
                             retry_base_delay_s=0.01)
     server = gateway.build_server(config, tmp_path / "gateway.jsonl", "127.0.0.1:0")
     threading.Thread(target=server.serve_forever, args=(POLL,), daemon=True).start()
+    statuses = []
     try:
-        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
-        conn.request("POST", "/v1/chat/completions", body=json.dumps(CHAT), headers={"Content-Type": "application/json"})
-        assert conn.getresponse().status == 502
-        conn.close()
+        for _ in range(2):
+            conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+            conn.request("POST", "/v1/chat/completions", body=json.dumps(CHAT),
+                         headers={"Content-Type": "application/json"})
+            statuses.append(conn.getresponse().status)
+            conn.close()
     finally:
-        assert gateway.shutdown(server, 0) == 0
-    [record] = [json.loads(line) for line in (tmp_path / "gateway.jsonl").read_text().splitlines()]
-    validate("gateway-record", record)
-    assert record["outcome"] == "upstream_failed" and record["upstream_attempts"] == 3  # 1 + 2 retries
+        exit_status = gateway.shutdown(server, 0)
+    assert statuses == [502, 502]
+    assert exit_status == gateway.EXIT_UNREACHABLE  # the toolkit fails the job on it
+    first, later = sorted((json.loads(line) for line in (tmp_path / "gateway.jsonl").read_text().splitlines()),
+                          key=lambda r: r["seq"])
+    for record in (first, later):
+        validate("gateway-record", record)
+    assert first["outcome"] == "upstream_failed" and first["upstream_attempts"] == 3  # 1 + 2 retries
+    assert later["outcome"] == "upstream_failed" and later["upstream_attempts"] == 0  # answered locally
+    assert "the provider could not be reached: ConnectionRefusedError" in capsys.readouterr().err
+
+
+def first_attempt_unreachable(gw):
+    """Make the gateway's first upstream connection fail before anything is sent."""
+    real, calls = gw.gateway.connection, []
+
+    def connection():
+        calls.append(1)
+        if len(calls) == 1:
+            return http.client.HTTPConnection("127.0.0.1", refused_port(), timeout=5)
+        return real()
+
+    gw.gateway.connection = connection
+
+
+@pytest.mark.parametrize("then", [
+    ("json", 503, {"error": "busy"}),    # retries run out on a provider answer
+    ("json", 429, {"error": "slow down"}),
+    ("json", 401, {"error": "bad key"}),  # a setup error
+    ("drop",),                             # a connection lost after the full request was sent
+])
+def test_a_void_after_an_attempt_that_never_reached_the_provider_fails_the_job(stub, make_gateway, then):
+    # The whole request counts: no void ever follows a connection the harness could have stopped.
+    gw = make_gateway(upstream_retries=1)
+    first_attempt_unreachable(gw)
+    stub.push(then)
+
+    assert gw.request(body=CHAT)[0] == 502
+
+    [record] = gw.records(1)
+    assert record["outcome"] == "upstream_failed" and record["upstream_attempts"] == 2
+    assert len(stub.requests) == 1
+    assert gw.close() == gateway.EXIT_UNREACHABLE
+
+
+def test_a_failed_tls_handshake_is_a_provider_that_cannot_be_reached(stub, make_gateway):
+    port = stub.server.server_address[1]  # a plain-http stub: every TLS handshake fails
+    gw = make_gateway(upstream=gateway.Upstream.parse(f"https://localhost:{port}/v1/"), upstream_retries=1)
+
+    assert gw.request(body=CHAT)[0] == 502
+
+    assert gw.records(1)[0]["upstream_attempts"] == 2
+    assert gw.close() == gateway.EXIT_UNREACHABLE
+
+
+def test_the_exit_status_is_set_before_the_void_is_recorded(stub, make_gateway, monkeypatch):
+    # A toolkit that sees the record and stops the gateway must always find status 3.
+    gw = make_gateway(upstream_retries=0)
+    first_attempt_unreachable(gw)
+    seen, real_decide = [], gateway.Exchange._decide
+
+    def decide(self, outcome, *args, **kwargs):
+        if outcome == "upstream_failed":
+            seen.append(self.gw.unreachable)
+        return real_decide(self, outcome, *args, **kwargs)
+
+    monkeypatch.setattr(gateway.Exchange, "_decide", decide)
+    assert gw.request(body=CHAT)[0] == 502
+    assert seen == [True]
+
+
+def test_shutdown_during_the_backoff_after_an_unreachable_attempt_is_not_a_void(stub, make_gateway):
+    gw = make_gateway(upstream_retries=1, retry_base_delay_s=10.0)
+    first_attempt_unreachable(gw)
+    worker, _ = background_request(gw, body=CHAT)
+    assert wait_for(lambda: any(e.unreached for e in list(gw.gateway._inflight)))
+
+    assert gw.close() == gateway.EXIT_OK  # the harness had gone; nothing was decided, nothing voids
+    worker.join(timeout=5)
+    [record] = gw.records(1)
+    assert record["outcome"] == "usage_unknown" and len(stub.requests) == 0
+
+
+def test_an_attempt_that_never_reached_the_provider_is_harmless_when_a_retry_succeeds(stub, make_gateway):
+    gw = make_gateway(upstream_retries=1)
+    first_attempt_unreachable(gw)
+    stub.push(("json", 200, completion()))
+
+    assert gw.request(body=CHAT)[0] == 200
+
+    [record] = gw.records(1)
+    assert record["outcome"] == "ok" and record["upstream_attempts"] == 2
+    assert gw.close() == gateway.EXIT_OK
 
 
 def test_streaming_requests_are_retried_too(stub, make_gateway):
@@ -507,6 +606,7 @@ def test_exhausted_retries_void_the_attempt(stub, make_gateway, status):
     first, later = gw.records(2)
     assert first["outcome"] == "upstream_failed" and first["upstream_attempts"] == 2
     assert later["outcome"] == "upstream_failed" and later["upstream_attempts"] == 0
+    assert gw.close() == gateway.EXIT_OK  # every attempt reached the provider: a void, re-run by the toolkit
 
 
 def test_a_timeout_after_sending_is_neither_retried_nor_a_void(stub, make_gateway):
