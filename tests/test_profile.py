@@ -18,7 +18,7 @@ def flag_values(args, flag):
 
 
 def harness_args():
-    return profile.harness_run_args(NAMES, COHORT, IMAGE, ["/hb/entrypoint"])
+    return profile.harness_create_args(NAMES, COHORT, IMAGE, ["/hb/entrypoint"])
 
 
 def test_harness_network_is_the_rep_internal_network():
@@ -77,3 +77,67 @@ def test_gateway_receives_the_key_by_name_only():
 def test_profiles_are_pure_functions():
     assert harness_args() == harness_args()
     assert profile.gateway_run_args(NAMES, COHORT, TOOLKIT, 3) == profile.gateway_run_args(NAMES, COHORT, TOOLKIT, 3)
+
+
+def test_harness_is_created_not_auto_removed_and_its_log_is_capped():
+    args = harness_args()
+    assert args[:3] == ["docker", "create", "--name"]
+    assert "--rm" not in args and "--detach" not in args
+    assert flag_values(args, "--log-driver") == ["json-file"]
+    assert sorted(flag_values(args, "--log-opt")) == ["max-file=2", "max-size=8m"]
+
+
+def test_helper_holds_the_volumes_and_has_no_network():
+    args = profile.helper_create_args(NAMES, TOOLKIT)
+    assert args[:2] == ["docker", "create"]
+    assert flag_values(args, "--network") == ["none"]
+    assert flag_values(args, "--mount") == [
+        f"type=volume,src={NAMES['workspace']},dst=/workspace",
+        f"type=volume,src={NAMES['task']},dst=/task",
+    ]
+    assert args[-1] == TOOLKIT
+
+
+def test_gateway_has_limits_and_drains_for_the_planned_time():
+    from hb.plan import GATEWAY_DRAIN_SECONDS
+    args = profile.gateway_run_args(NAMES, COHORT, TOOLKIT, upstream_retries=3)
+    assert flag_values(args, "--memory") == flag_values(args, "--memory-swap") == [profile.GATEWAY_MEMORY]
+    assert flag_values(args, "--pids-limit") == [str(profile.GATEWAY_PIDS)]
+    assert flag_values(args, "--drain-s") == [str(GATEWAY_DRAIN_SECONDS)]
+    assert flag_values(args, "--ulimit") == [f"nofile={profile.GATEWAY_NOFILE}:{profile.GATEWAY_NOFILE}"]
+    # each connection: one thread and at most three descriptors, so threads always run out first
+    assert profile.GATEWAY_NOFILE >= 4 * profile.GATEWAY_PIDS
+    assert flag_values(args, "--log-driver") == ["json-file"]
+    assert sorted(flag_values(args, "--log-opt")) == ["max-file=2", "max-size=8m"]
+    assert flag_values(args, "--mount") == [f"type=volume,src={NAMES['gateway_log']},dst=/log"]
+
+
+def probe_args():
+    return profile.probe_create_args(profile.probe_names("fix-pagination-off-by-one", 1), TOOLKIT,
+                                     "probe.py", "inputs.json")
+
+
+def test_probe_sandbox_has_no_network_and_a_read_only_tree():
+    args = probe_args()
+    names = profile.probe_names("fix-pagination-off-by-one", 1)
+    assert flag_values(args, "--network") == ["none"]
+    assert flag_values(args, "--mount") == [f"type=volume,src={names['volume']},dst=/probe,readonly"]
+    assert "--read-only" in args
+    assert flag_values(args, "--cap-drop") == ["ALL"]
+    assert flag_values(args, "--security-opt") == ["no-new-privileges"]
+    assert flag_values(args, "--user") == [profile.PROBE_USER]
+    assert flag_values(args, "--env") == ["HOME=/tmp"]
+    assert flag_values(args, "--log-driver") == ["none"]
+    assert flag_values(args, "--memory") == flag_values(args, "--memory-swap") == [profile.PROBE_MEMORY]
+    joined = " ".join(args)
+    for text in ("docker.sock", "type=bind", "MODEL_API_KEY", "--privileged", "--cap-add"):
+        assert text not in joined, text
+    assert args[args.index(TOOLKIT) + 1:] == [
+        "-I", "-B", "/probe/program/probe.py", "/probe/tree", "/probe/inputs/inputs.json"]
+
+
+def test_names_are_distinct_per_rep_and_attempt():
+    a, b, c = profile.rep_names("t", 1, 1), profile.rep_names("t", 1, 2), profile.rep_names("t", 2, 1)
+    every = list(a.values()) + list(b.values()) + list(c.values())
+    assert len(every) == len(set(every))
+    assert set(profile.probe_names("t", 1).values()).isdisjoint(every)
