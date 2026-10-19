@@ -17,9 +17,15 @@ what the harness sends:
   only when the provider cannot be working on the request: before it was fully
   sent, or after the provider answered 408, 429 or 5xx.
 * An attempt is void (recorded as `upstream_failed`; the toolkit re-runs it)
-  only for provider-side or setup failures: retries exhausted, setup errors
-  (401/403/404), a connection lost after the request was fully sent, a broken
-  stream, usage that cannot be counted, or a gateway fault after admission.
+  only for provider-side or setup failures: retries exhausted on provider
+  answers (408/429/5xx), setup errors (401/403/404), a connection lost after
+  the request was fully sent, a broken stream, usage that cannot be counted,
+  or a gateway fault after admission.
+* A provider that cannot be reached is not a void. When a request would void
+  and any of its attempts failed before the request was fully sent (the
+  connection, the TLS handshake or the send failed), it is recorded and
+  answered like a void, but the exit status is 3 and the toolkit fails the
+  job: the harness can exhaust host resources those connections need.
   A void is a re-roll, so nothing that depends only on the harness's own
   behaviour voids: malformed requests are `bad_request`, and requests the gateway stops waiting
   for (a read timeout after sending, before or after the response headers, or
@@ -29,9 +35,10 @@ One record per POST is appended to a JSONL log
 (schemas/gateway-record.schema.json). Bodies are stored only as hashes.
 Standard library only, so it runs in the toolkit image without extra
 dependencies. Exit status: 0 after a clean shutdown, 1 if a record could not
-be written, 2 for bad settings. The toolkit fails the job on any non-zero
-status instead of re-running the attempt: a full disk can be the harness's
-doing, so it must not become a re-roll.
+be written, 2 for bad settings, 3 if the provider could not be reached. The
+toolkit fails the job on any non-zero status instead of re-running the
+attempt: a full disk or exhausted host resources can be the harness's doing,
+so they must not become a re-roll.
 
 Usage:
     MODEL_API_KEY=... python -m hb.gateway --listen 0.0.0.0:8080 \\
@@ -74,6 +81,11 @@ FINISH_REASONS = frozenset({"stop", "length", "tool_calls", "content_filter"})
 REJECTED_STATUSES = frozenset({400, 413, 422})  # the provider refused this request; the harness can react
 RETRYABLE_STATUSES = frozenset({408, 429})  # plus every 5xx
 ZERO_USAGE = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
+# Exit statuses. Any non-zero status fails the task job (the toolkit never re-runs on it).
+EXIT_OK = 0
+EXIT_LOG_FAILED = 1     # a record could not be written
+EXIT_BAD_SETTINGS = 2   # refused to start
+EXIT_UNREACHABLE = 3    # a request would have voided after one of its attempts could not reach the provider
 _CHUNK_SIZE = re.compile(rb"[0-9A-Fa-f]{1,8}")
 
 
@@ -428,6 +440,7 @@ class Gateway:
         self.ledger = Ledger(config.max_total_tokens, config.max_calls)
         self.log = RecordLog(log_path)
         self.fatal = False
+        self.unreachable = False
         self.on_fatal = lambda: None
         self._ssl = (ssl.create_default_context(cafile=config.upstream_ca_file)
                      if config.upstream.scheme == "https" else None)
@@ -468,6 +481,12 @@ class Gateway:
             self.ledger.mark_void()
             self.fatal = True
             self.on_fatal()
+
+    def mark_unreachable(self, reason: str) -> None:
+        """The provider could not be reached: the exit status becomes 3, which fails the job."""
+        if not self.unreachable:
+            self.unreachable = True
+            print(f"hb-gateway: the provider could not be reached: {reason}", file=sys.stderr, flush=True)
 
     def register(self, exchange: "Exchange") -> bool:
         """Track a request. False once shutdown has closed the gateway to new requests."""
@@ -515,6 +534,7 @@ class Exchange:
         self.model_rewritten = False
         self.admitted = False
         self.attempts = 0
+        self.unreached = None  # the last failure of an attempt that could not reach the provider
         self.request_bytes = b""
         self.response_sha = _sha256(b"")
         self.status_sent = None
@@ -729,8 +749,9 @@ class Exchange:
         """Send the request, retrying where that is safe.
 
         Returns (conn, resp, None), or (None, None, "timeout" | "failed").
-        Retried: connection and TLS failures before the request was fully sent,
-        and 408/429/5xx answers. Not retried, once the request was fully sent:
+        Retried: connection and TLS failures before the request was fully sent
+        (remembered in self.unreached, see _fail), and 408/429/5xx answers. Not
+        retried, once the request was fully sent:
         a timeout ("timeout": usage_unknown), or a connection that fails or
         closes before any response ("failed": a void). The provider may already
         be generating, and billing, an answer the gateway would never count, so
@@ -758,6 +779,7 @@ class Exchange:
                 conn.close()
                 if sent:  # the provider may hold the whole request: never send it again
                     return None, None, "timeout" if isinstance(exc, TimeoutError) else "failed"
+                self.unreached = f"{type(exc).__name__}: {exc}"
                 if self.attempts > cfg.upstream_retries:
                     return None, None, "failed"
                 self._abandoned_event.wait(self.gw.retry_delay(self.attempts, None))
@@ -858,12 +880,15 @@ class Exchange:
         """Fix this request's record, unless shutdown abandoned it first.
 
         A void and the counting of usage already known happen in the same step,
-        so shutdown either keeps them or prevents them.
+        so shutdown either keeps them or prevents them. So does exit status 3 (see
+        _fail): a request shutdown abandoned first never voids, so it never sets it.
         """
         with self._lock:
             if self.abandoned:
                 return None
             if void:
+                if self.unreached is not None:
+                    self.gw.mark_unreachable(self.unreached)
                 self.gw.ledger.mark_void()
                 if usage is not None:
                     self._count_locked(usage)
@@ -899,7 +924,17 @@ class Exchange:
         return record
 
     def _fail(self, usage=None, finish="none", tools=(0, 0), client_ok=True) -> dict | None:
-        """Void the attempt. Usage already known is still counted, before anything is sent."""
+        """Void the attempt. Usage already known is still counted, before anything is sent.
+
+        If any attempt of this request could not reach the provider (the connection,
+        the TLS handshake or the send failed before the request was complete), the
+        harness may have caused the failure: it can exhaust host resources those
+        connections need, such as a kernel table every container shares. A void
+        would be a re-roll, so the exit status becomes 3 and the job fails instead.
+        The record and the answer stay those of a void, so later requests are
+        answered locally. _decide sets the status with the void, before the record
+        exists, so a toolkit that reacts to the record always finds it.
+        """
         record = self._decide("upstream_failed", self.status_sent or 502, usage, finish, tools, void=True)
         if record is None:
             return None
@@ -1060,7 +1095,8 @@ def build_server(config: Config, log_path: Path, listen: str) -> GatewayServer:
 def shutdown(server: GatewayServer, drain_s: float) -> int:
     """Stop serving, record requests still in flight after drain_s, close the log.
 
-    Returns the exit status: 0, or 1 if a record could not be written.
+    Returns the exit status: 0; 1 if a record could not be written; 3 if the
+    provider could not be reached.
     """
     server.stop_async()  # no-op if already stopping
     server.shutdown()  # returns once serve_forever() has stopped
@@ -1071,7 +1107,9 @@ def shutdown(server: GatewayServer, drain_s: float) -> int:
     except OSError:  # a buffered write failed on close
         traceback.print_exc(file=sys.stderr)
         server.gateway.fatal = True
-    return 1 if server.gateway.fatal else 0
+    if server.gateway.fatal:
+        return EXIT_LOG_FAILED
+    return EXIT_UNREACHABLE if server.gateway.unreachable else EXIT_OK
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -1116,7 +1154,7 @@ def main(argv=None) -> int:
         server = build_server(config, args.log, args.listen)
     except (ConfigError, OSError, ssl.SSLError) as exc:
         print(f"hb-gateway: {exc}", file=sys.stderr)
-        return 2
+        return EXIT_BAD_SETTINGS
     host, port = server.server_address[:2]
     print(f"hb-gateway listening on {host}:{port}", file=sys.stderr, flush=True)
     signal.signal(signal.SIGTERM, lambda signum, frame: server.stop_async())

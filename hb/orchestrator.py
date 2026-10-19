@@ -12,9 +12,10 @@ For each rep attempt (container arguments come from hb/profile.py):
    the gateway first refuses a request for budget (`budget_exhausted`); or as
    soon as the gateway log shows a void (`upstream_failed`).
 5. Stop the gateway with a timeout longer than its drain period. A non-zero
-   exit status fails the job: it means records could not be written, or the
-   gateway was killed, and a full disk or an exhausted memory limit can be
-   caused by the harness, so it must never become a re-roll.
+   exit status fails the job: it means records could not be written, the
+   provider could not be reached, or the gateway was killed. A full disk,
+   exhausted host resources or an exhausted memory limit can be caused by the
+   harness, so none of these may become a re-roll.
 6. Copy out gateway.jsonl. Any `upstream_failed` record makes the attempt void:
    it is discarded and the rep runs again in fresh containers, up to the
    suite's `max_reruns_per_rep` times; after that the job fails.
@@ -42,6 +43,7 @@ from typing import Callable
 
 from . import plan, profile
 from .dockercli import DEFAULT_TIMEOUT_S, Clock, Docker, DockerError
+from .gateway import EXIT_LOG_FAILED, EXIT_UNREACHABLE
 from .grade import MAX_OBSERVATION_BYTES, grade_rep
 from .identity import cohort_from_suite
 from .manifest import MANIFEST_NAME, build_task_manifest, pack_bundle, tree_digest
@@ -207,6 +209,23 @@ def _wait_listening(docker: Docker, clock: Clock, gateway: str, timing: Timing) 
         clock.sleep(0.2)
 
 
+GATEWAY_EXITS = {
+    EXIT_LOG_FAILED: "it could not write a record (for example, the disk is full), or it crashed",
+    EXIT_UNREACHABLE: "the provider could not be reached (an attempt failed before its request was sent)",
+}
+
+
+def _gateway_exit_reason(docker: Docker, gateway: str, status: int) -> str:
+    """Why the job fails on a gateway exit status, with the end of the gateway's output."""
+    reason = GATEWAY_EXITS.get(status, "it was killed (for example, at its memory limit) or crashed")
+    try:
+        output = docker.logs(gateway, 4096).decode("utf-8", errors="replace").strip()
+    except DockerError:
+        output = ""
+    return (f"the gateway exited with status {status}: {reason}. The harness could have caused this, so the "
+            f"job fails instead of re-running the attempt." + (f" Gateway output: {output[-1000:]}" if output else ""))
+
+
 def _kill_and_wait(docker: Docker, clock: Clock, name: str, timing: Timing) -> bool:
     """SIGKILL a container and wait until it has stopped. False if it had stopped by itself."""
     killed = docker.kill(name)
@@ -324,7 +343,7 @@ def _run_attempt(job: TaskJob, cohort: dict, names: dict, *, docker: Docker, clo
     docker.stop(names["gateway"], timing.gateway_stop_grace_s)
     gateway_exit = docker.states([names["gateway"]])[names["gateway"]]["exit_code"]
     if gateway_exit != 0:
-        raise GatewayFailed(f"the gateway exited with status {gateway_exit}; its records cannot be trusted")
+        raise GatewayFailed(_gateway_exit_reason(docker, names["gateway"], gateway_exit))
     gateway_log = _read_gateway_log(docker, names["gateway"])
     if any(r["outcome"] == "upstream_failed" for r in parse_records(gateway_log)):
         return Attempt(void=True)

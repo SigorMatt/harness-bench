@@ -23,6 +23,7 @@ import json
 import os
 import queue
 import shutil
+import socket
 import ssl
 import subprocess
 import threading
@@ -33,7 +34,7 @@ import pytest
 from hb import profile
 from hb.dockercli import Clock, Docker
 from hb.manifest import extract_bundle, verify_task_bundle
-from hb.orchestrator import DockerProbeRunner, TaskJob, Timing, run_task
+from hb.orchestrator import DockerProbeRunner, GatewayFailed, TaskJob, Timing, run_task
 from hb.schemas import validate
 
 pytestmark = pytest.mark.skipif(os.environ.get("HB_DOCKER_TESTS") != "1",
@@ -335,6 +336,21 @@ def test_run_task_inside_the_toolkit_container(tmp_path, env):
     assert rep(bundle, 1, "grade.json")["resolved"] is True
     if toolkit_ref:
         assert rep(bundle, 1, "grade.json")["grader_image"] == toolkit_ref
+    assert leftovers() == []
+
+
+def test_unreachable_provider_fails_the_job(tmp_path, env):
+    # Nothing listens on this port: the gateway cannot connect, so the retries run
+    # out before anything is sent. It exits 3, and the job fails instead of re-running.
+    with socket.socket() as placeholder:
+        placeholder.bind(("0.0.0.0", 0))
+        port = placeholder.getsockname()[1]
+    host = env["provider"].base_url.split("//", 1)[1].split(":", 1)[0]
+    job = make_job(tmp_path, env, reps=1, model__base_url=f"https://{host}:{port}/v1/")
+    with pytest.raises(GatewayFailed, match="status 3: the provider could not be reached"):
+        run_task(job, docker=Docker(), clock=Clock(), out_dir=tmp_path / "out", work_dir=tmp_path / "work",
+                 timing=TIMING)
+    assert not (tmp_path / "out").exists()
     assert leftovers() == []
 
 

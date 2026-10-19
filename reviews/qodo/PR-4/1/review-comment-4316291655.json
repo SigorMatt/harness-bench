@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4316291655",
+  "pull_request_review_id": 5574631349,
+  "id": 4316291655,
+  "node_id": "PRRC_kwDOVO0AUs8AAAABAUViRw",
+  "diff_hunk": "@@ -899,7 +921,19 @@ def _stopped_waiting(self, client_ok: bool = True) -> dict | None:\n         return record\n \n     def _fail(self, usage=None, finish=\"none\", tools=(0, 0), client_ok=True) -> dict | None:\n-        \"\"\"Void the attempt. Usage already known is still counted, before anything is sent.\"\"\"\n+        \"\"\"Void the attempt. Usage already known is still counted, before anything is sent.\n+\n+        If any attempt of this request could not reach the provider (the connection,\n+        the TLS handshake or the send failed before the request was complete), the\n+        harness may have caused the failure: it can exhaust host resources those\n+        connections need, such as a kernel table every container shares. A void\n+        would be a re-roll, so the exit status becomes 3 and the job fails instead.\n+        The record and the answer stay those of a void, so later requests are\n+        answered locally. The status is set before the record exists, so a toolkit\n+        that reacts to the record always finds it.\n+        \"\"\"\n+        if self.unreached is not None:\n+            self.gw.mark_unreachable(self.unreached)",
+  "path": "hb/gateway.py",
+  "commit_id": "aa1b1b93028ce784fc464ca33825e10072a9c36e",
+  "original_commit_id": "aa1b1b93028ce784fc464ca33825e10072a9c36e",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n1\\. Shutdown can fail a job when no void happened <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>Exchange._fail</i></b> calls <b><i>gw.mark_unreachable</i></b> before <b><i>_decide</i></b> checks <b><i>self.abandoned</i></b>, so an\nexchange that shutdown records as <b><i>usage_unknown</i></b> rather than a void can still set exit status 3. If\na first connect fails but its retry is still streaming when shutdown abandons the request, closing\nthe upstream socket can send the relay through <b><i>_fail</i></b>; <b><i>_decide</i></b> then returns <b><i>None</i></b>, yet the\nnonzero gateway status fails the job.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\n`Exchange._fail` marks the gateway unreachable before the locked void decision, so shutdown can record an abandoned request as non-void while the gateway still exits with status 3.\n\n## Fix Focus Areas\n- hb/gateway.py[923-939]\n- hb/gateway.py[875-893]\n\n## Recommended Fix\nMove `mark_unreachable` into `_decide`’s locked `if void:` branch, after the `self.abandoned` check and before `_record`, or pass a flag to `_decide` to achieve the same ordering. Keep the status set before a void record becomes visible, but never set it for an abandoned request. Add a test in which the first connect fails, the retry streams, and shutdown abandons the request; the exit status must be 0.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/c8ec4f74-ab9f-4f1a-a5cf-84ee297f0484?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/c8ec4f74-ab9f-4f1a-a5cf-84ee297f0484)",
+  "created_at": "2026-10-19T16:32:28Z",
+  "updated_at": "2026-10-19T16:32:28Z",
+  "html_url": "https://github.com/SigorMatt/harness-bench/pull/4#discussion_r4316291655",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/4",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4316291655"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/harness-bench/pull/4#discussion_r4316291655"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/4"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4316291655/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 935,
+  "original_start_line": 935,
+  "start_side": "RIGHT",
+  "line": 936,
+  "original_line": 936,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 111,
+  "position": 111,
+  "subject_type": "line"
+}

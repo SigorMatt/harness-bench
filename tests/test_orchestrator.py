@@ -388,6 +388,38 @@ def test_gateway_failure_fails_the_job_instead_of_voiding(tmp_path):
         run(tmp_path, scripts, reps=1)
 
 
+def test_unreachable_provider_fails_the_job_instead_of_voiding(tmp_path):
+    # Exit status 3: the retries ran out on a connection that never reached the provider,
+    # which the harness can cause by exhausting host resources. The record reads like a
+    # void; the exit status decides, and the attempt is not run again.
+    scripts = {(1, 1): Script(exit_at=None, records=[(1.0, "upstream_failed")], gateway_exit=3),
+               (1, 2): Script()}
+    docker = FakeDocker(FakeClock(), scripts)
+    suite, suite_dir = make_suite(tmp_path, reps=1)
+    job = TaskJob(suite=suite, suite_dir=suite_dir, task_id=TASK_ID, harness=HARNESS, toolkit_image=TOOLKIT, run=RUN)
+    with pytest.raises(GatewayFailed, match="status 3: the provider could not be reached") as failure:
+        run_task(job, docker=docker, clock=docker.clock, out_dir=tmp_path / "out", work_dir=tmp_path / "work",
+                 timing=TIMING, probe_runner=lambda rep, scratch: run_probe_unsandboxed_for_tests)
+    assert profile.rep_names(TASK_ID, 1, 2)["harness"] not in docker.started
+    assert "Gateway output: hb-gateway listening" in str(failure.value)  # the end of its output, for the job log
+
+
+def test_gateway_failure_reason_survives_unreadable_gateway_output(tmp_path):
+    class NoLogsAfterStop(FakeDocker):
+        def logs(self, name, max_bytes):
+            if name in self.stopped:
+                raise DockerError("logs unavailable")
+            return super().logs(name, max_bytes)
+
+    docker = NoLogsAfterStop(FakeClock(), {(1, 1): Script(gateway_exit=137)})
+    suite, suite_dir = make_suite(tmp_path, reps=1)
+    job = TaskJob(suite=suite, suite_dir=suite_dir, task_id=TASK_ID, harness=HARNESS, toolkit_image=TOOLKIT, run=RUN)
+    with pytest.raises(GatewayFailed, match="status 137: it was killed") as failure:
+        run_task(job, docker=docker, clock=docker.clock, out_dir=tmp_path / "out", work_dir=tmp_path / "work",
+                 timing=TIMING, probe_runner=lambda rep, scratch: run_probe_unsandboxed_for_tests)
+    assert "Gateway output" not in str(failure.value)
+
+
 def test_gateway_that_stops_mid_attempt_fails_the_job(tmp_path):
     with pytest.raises(GatewayFailed):
         run(tmp_path, {(1, 1): Script(exit_at=None, gateway_dies_at=3.0)}, reps=1)
