@@ -6,7 +6,7 @@ import pytest
 
 from hb.accept import (
     attestation_commands, attestation_verify_args, check_attempts, check_run, expected_artifact_files,
-    rerun_budget_ok, run_key,
+    rerun_allowance, rerun_budget_ok, run_key,
 )
 from hb.manifest import pack_bundle
 
@@ -96,6 +96,24 @@ def test_the_example_run_is_within_its_infra_rules():
 @pytest.mark.parametrize("attempts,ok", [([1] * 20, True), ([2] + [1] * 19, True), ([2, 2] + [1] * 18, False)])
 def test_rerun_cap(attempts, ok):
     assert rerun_budget_ok(attempts, max_rerun_permille=50) is ok
+
+
+@pytest.mark.parametrize("reps,permille,allowed", [(3, 50, 0), (19, 50, 0), (20, 50, 1), (768, 50, 38),
+                                                   (5, 200, 1), (3, 0, 0)])
+def test_rerun_allowance(reps, permille, allowed):
+    assert rerun_allowance(reps, permille) == allowed
+
+
+def test_the_allowance_is_exactly_the_cap_as_first_written():
+    # rerun_budget_ok() is now written with rerun_allowance(), so both are checked
+    # against the cap's original form: re-runs * 1000 <= permille * reps.
+    for reps in range(1, 41):
+        for permille in (0, 1, 33, 50, 199, 200):
+            allowed = rerun_allowance(reps, permille)
+            assert allowed * 1000 <= permille * reps < (allowed + 1) * 1000
+            for reruns in range(reps + 1):
+                attempts = [2] * reruns + [1] * (reps - reruns)
+                assert rerun_budget_ok(attempts, permille) is (reruns * 1000 <= permille * reps)
 
 
 def test_attempts_per_rep_are_capped():

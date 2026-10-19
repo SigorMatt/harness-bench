@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from hb import orchestrator, profile
+from hb.accept import rerun_allowance
 from hb.dockercli import DockerError
 from hb.grade import run_probe_unsandboxed_for_tests
 from hb.manifest import extract_bundle, verify_task_bundle
@@ -250,6 +251,22 @@ def make_suite(tmp_path, **changes) -> tuple[dict, Path]:
     return suite, suite_dir
 
 
+def allowing_reruns(count: int, reps: int) -> dict:
+    """Suite changes for a run that may have exactly `count` infra re-runs in all.
+
+    A run of the one-task example suite may have none (50 permille of 3 reps,
+    rounded down), so the task list is padded: more reps in the run raise the cap.
+    Only the job's own task needs a directory.
+    """
+    permille = 200  # the schema's maximum, so the shortest list
+    example = json.loads((EXAMPLE_SUITE / "suite.json").read_text())["tasks"]
+    count_tasks = -(-count * 1000 // (permille * reps))
+    if count < 1 or len(example) != 1 or rerun_allowance(count_tasks * reps, permille) != count:
+        raise ValueError(f"no padding gives exactly {count} re-runs with {reps} reps")
+    filler = [{"id": f"zz-filler-{n:03d}", "category": example[0]["category"]} for n in range(1, count_tasks)]
+    return {"reps": reps, "tasks": example + filler, "infra__max_rerun_permille": permille}
+
+
 def run(tmp_path, scripts, timing=TIMING, **suite_changes):
     suite, suite_dir = make_suite(tmp_path, **suite_changes)
     clock = FakeClock()
@@ -362,35 +379,100 @@ def test_void_attempt_is_run_again_in_fresh_containers(tmp_path):
         (1, 1): Script(exit_at=None, records=[(1.0, "ok"), (2.0, "upstream_failed")]),
         (1, 2): Script(),
     }
-    docker, out = run(tmp_path, scripts, reps=1)
+    docker, out = run(tmp_path, scripts, **allowing_reruns(1, reps=1))
     lifecycle = rep_file(out, 1, "lifecycle.json")
     assert lifecycle["attempts"] == 2 and lifecycle["termination"] == "exited"
     assert b"upstream_failed" not in rep_file(out, 1, "gateway.jsonl")
     first = profile.rep_names(TASK_ID, 1, 1)
     assert ["kill", first["harness"]] in docker.calls  # ended as soon as the state file showed the void
     assert docker.killed[first["harness"]] - docker.started[first["harness"]] == pytest.approx(2.0)
-    assert any(first["workspace"] in volumes for _, _, volumes in docker.removed)
+    assert docker.removed.count(attempt_resources(1, 1)) == 2  # before (leftovers) and after the attempt
 
 
 def test_void_seen_only_after_the_gateway_drained(tmp_path):
     # The harness exited at 5 s; the void record is written during the drain.
     scripts = {(1, 1): Script(records=[(1.0, "ok"), (9.0, "upstream_failed")]), (1, 2): Script()}
-    _, out = run(tmp_path, scripts, reps=1)
+    _, out = run(tmp_path, scripts, **allowing_reruns(1, reps=1))
     assert rep_file(out, 1, "lifecycle.json")["attempts"] == 2
 
 
 def test_scratch_copies_are_removed_after_each_attempt_and_grade(tmp_path):
     # They scale with the workspace; kept for every rep, they would add up on the runner's disk.
     scripts = {(1, 1): Script(records=[(1.0, "upstream_failed")]), (1, 2): Script(), (2, 1): Script()}
-    run(tmp_path, scripts, reps=2)
+    run(tmp_path, scripts, **allowing_reruns(1, reps=2))
     assert sorted(p.name for p in (tmp_path / "work").iterdir()) == ["bundle", "pristine"]
 
 
-def test_reruns_are_capped(tmp_path):
-    void = [(1.0, "upstream_failed")]
-    scripts = {(1, a): Script(records=void) for a in (1, 2)}
-    with pytest.raises(RerunsExhausted):
-        run(tmp_path, scripts, reps=1, infra__max_reruns_per_rep=1)
+def attempt_resources(rep: int, attempt: int) -> tuple:
+    """The containers, networks and volumes one attempt removes, as the fake records a removal."""
+    names = profile.rep_names(TASK_ID, rep, attempt)
+    return ((names["harness"], names["gateway"], names["helper"]), (names["network"],),
+            (names["workspace"], names["task"], names["gateway_log"]))
+
+
+def started_harnesses(docker) -> list[tuple[int, int]]:
+    """(rep, attempt) of every harness container the job started, in order."""
+    names = {profile.rep_names(TASK_ID, r, a)["harness"]: (r, a) for r in range(1, 6) for a in range(1, 5)}
+    return [names[name] for name in docker.started]
+
+
+def run_failing(tmp_path, scripts, **suite_changes):
+    """Like run(), for a job that fails: returns the Docker fake and the error."""
+    suite, suite_dir = make_suite(tmp_path, **suite_changes)
+    clock = FakeClock()
+    docker = FakeDocker(clock, scripts)
+    job = TaskJob(suite=suite, suite_dir=suite_dir, task_id=TASK_ID, harness=HARNESS, toolkit_image=TOOLKIT, run=RUN)
+    with pytest.raises(RunTaskError) as error:
+        run_task(job, docker=docker, clock=clock, out_dir=tmp_path / "out", work_dir=tmp_path / "work",
+                 timing=TIMING, probe_runner=lambda rep, scratch: run_probe_unsandboxed_for_tests)
+    assert not (tmp_path / "out").exists()  # no bundle, so the run cannot be sealed
+    return docker, error.value
+
+
+VOID = [(1.0, "upstream_failed")]
+
+
+def test_reruns_are_capped_per_rep(tmp_path):
+    # The run would allow more; the rep's own limit stops it.
+    scripts = {(1, a): Script(records=VOID) for a in (1, 2)}
+    docker, error = run_failing(tmp_path, scripts, infra__max_reruns_per_rep=1, **allowing_reruns(5, reps=1))
+    assert isinstance(error, RerunsExhausted)
+    assert "every allowed attempt (2) was void" in str(error)
+    assert started_harnesses(docker) == [(1, 1), (1, 2)]
+
+
+def test_a_void_the_run_cannot_rerun_fails_the_job_at_once(tmp_path, capsys):
+    # A run of the one-task example suite may have no re-run (50 permille of 3
+    # reps), so seal would refuse it: no further attempt spends tokens on it.
+    scripts = {(1, 1): Script(records=VOID), (1, 2): Script()}
+    docker, error = run_failing(tmp_path, scripts)
+    assert isinstance(error, RerunsExhausted)
+    assert "past the suite's cap on infra re-runs" in str(error)
+    assert started_harnesses(docker) == [(1, 1)]
+    assert "no re-runs left for this run" in capsys.readouterr().err
+    assert docker.removed.count(attempt_resources(1, 1)) == 2  # still removed after the attempt, too
+
+
+def test_when_both_limits_stop_a_rep_its_own_limit_is_reported(tmp_path):
+    scripts = {(1, 1): Script(records=VOID), (1, 2): Script()}
+    docker, error = run_failing(tmp_path, scripts, infra__max_reruns_per_rep=0)  # and the run allows none
+    assert "every allowed attempt (1) was void" in str(error)
+    assert started_harnesses(docker) == [(1, 1)]
+
+
+def test_the_run_cap_counts_this_jobs_reruns_across_reps(tmp_path):
+    # One re-run for the whole run: rep 1 takes it, so rep 2's void ends the job.
+    scripts = {(1, 1): Script(records=VOID), (1, 2): Script(), (2, 1): Script(records=VOID), (2, 2): Script()}
+    docker, error = run_failing(tmp_path, scripts, **allowing_reruns(1, reps=2))
+    assert "rep 2: attempt 1 was void" in str(error)
+    assert started_harnesses(docker) == [(1, 1), (1, 2), (2, 1)]
+
+
+def test_reruns_within_both_caps_complete_the_job(tmp_path):
+    # Two re-runs for the run, at most two per rep: both used, in different reps.
+    scripts = {(1, 1): Script(records=VOID), (1, 2): Script(), (2, 1): Script(records=VOID), (2, 2): Script()}
+    _, out = run(tmp_path, scripts, **allowing_reruns(2, reps=2))
+    assert [rep_file(out, r, "lifecycle.json")["attempts"] for r in (1, 2)] == [2, 2]
 
 
 def test_gateway_failure_fails_the_job_instead_of_voiding(tmp_path):
@@ -505,7 +587,7 @@ def test_an_unreadable_state_only_delays_early_kills(tmp_path, capsys):
     # The void kill waits for the wall clock, and the final log still makes the attempt void.
     scripts = {(1, 1): Script(exit_at=None, records=[(1.0, "upstream_failed")], state_read_fails=True),
                (1, 2): Script()}
-    docker, out = run(tmp_path, scripts, reps=1, budget__wall_seconds=60)
+    docker, out = run(tmp_path, scripts, budget__wall_seconds=60, **allowing_reruns(1, reps=1))
     assert rep_file(out, 1, "lifecycle.json")["attempts"] == 2
     first = profile.rep_names(TASK_ID, 1, 1)["harness"]
     assert docker.killed[first] - docker.started[first] == pytest.approx(60.0, abs=0.01)

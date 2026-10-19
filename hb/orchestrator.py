@@ -19,7 +19,10 @@ For each rep attempt (container arguments come from hb/profile.py):
    harness, so none of these may become a re-roll.
 6. Copy out gateway.jsonl. Any `upstream_failed` record makes the attempt void:
    it is discarded and the rep runs again in fresh containers, up to the
-   suite's `max_reruns_per_rep` times; after that the job fails.
+   suite's `max_reruns_per_rep` times; after that the job fails. It also fails
+   at a void that would take this job's own re-runs past what the whole run
+   may have (`max_rerun_permille` of all its reps), because seal would refuse
+   the run.
 7. Copy out the harness's output and its workspace, and diff the workspace
    against pristine (hb/transfer.py, hb/patch.py).
 8. Remove the attempt's containers, network and volumes, and its local scratch
@@ -43,6 +46,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import plan, profile
+from .accept import rerun_allowance
 from .dockercli import DEFAULT_TIMEOUT_S, Clock, Docker, DockerError
 from .gateway import EXIT_LOG_FAILED, EXIT_UNREACHABLE
 from .grade import MAX_OBSERVATION_BYTES, grade_rep
@@ -361,10 +365,19 @@ def _run_attempt(job: TaskJob, cohort: dict, names: dict, *, docker: Docker, clo
 
 
 def run_rep(job: TaskJob, cohort: dict, rep: int, *, docker: Docker, clock: Clock, pristine: Path,
-            work: Path, timing: Timing = DEFAULT_TIMING) -> tuple[Attempt, int]:
-    """Run attempts until one is not void. Returns it and the number of attempts taken."""
-    limit = 1 + job.suite["infra"]["max_reruns_per_rep"]
-    for attempt in range(1, limit + 1):
+            work: Path, job_reruns_left: int, timing: Timing = DEFAULT_TIMING) -> tuple[Attempt, int]:
+    """Run attempts until one is not void. Returns it and the number of attempts taken.
+
+    A void attempt is run again unless that would pass the rep's limit
+    (infra.max_reruns_per_rep) or take this job past job_reruns_left: the
+    run's cap minus the re-runs this job already took. Either way no accepted
+    run could have that many (spec I10), so the job fails rather than spend
+    more tokens. When both apply, the rep's limit is the one reported.
+    """
+    rep_limit = job.suite["infra"]["max_reruns_per_rep"]
+    attempt = 0
+    while True:
+        attempt += 1
         result = run_attempt(job, cohort, rep, attempt, docker=docker, clock=clock, pristine=pristine,
                              scratch=work / f"r{rep}a{attempt}", timing=timing)
         if not result.void:
@@ -372,9 +385,16 @@ def run_rep(job: TaskJob, cohort: dict, rep: int, *, docker: Docker, clock: Cloc
             _stderr(f"rep {rep} attempt {attempt}: {result.termination}, exit status {result.exit_code}, "
                     f"{seconds:.0f}s")
             return result, attempt
-        _stderr(f"rep {rep} attempt {attempt}: void (the provider failed); "
-                + ("running it again" if attempt < limit else "no re-runs left"))
-    raise RerunsExhausted(f"rep {rep}: every allowed attempt ({limit}) was void")
+        reruns = attempt  # the re-runs this rep takes, counting the one it now needs
+        if reruns > rep_limit:
+            _stderr(f"rep {rep} attempt {attempt}: void (the provider failed); no re-runs left for this rep")
+            raise RerunsExhausted(f"rep {rep}: every allowed attempt ({rep_limit + 1}) was void")
+        if reruns > job_reruns_left:
+            _stderr(f"rep {rep} attempt {attempt}: void (the provider failed); no re-runs left for this run")
+            raise RerunsExhausted(
+                f"rep {rep}: attempt {attempt} was void, and another attempt would take this run past the "
+                "suite's cap on infra re-runs (infra.max_rerun_permille), so it could not be accepted")
+        _stderr(f"rep {rep} attempt {attempt}: void (the provider failed); running it again")
 
 
 # ------------------------------------------------------------------ grading
@@ -455,10 +475,15 @@ def run_task(job: TaskJob, *, docker: Docker, clock: Clock, out_dir: Path, work_
     pristine = work_dir / "pristine"
     materialize(task_dir / task["repo"], pristine, suite["ignore_paths"])
 
+    # The run's cap counts every rep of every task. This job sees only its own
+    # re-runs, a lower bound on the run's: past the cap, seal would refuse the
+    # run. Re-runs spread over several jobs are left to seal.
+    job_reruns_left = rerun_allowance(len(suite["tasks"]) * suite["reps"], suite["infra"]["max_rerun_permille"])
     bundle = work_dir / "bundle"
     for rep in range(1, suite["reps"] + 1):
         result, attempts = run_rep(job, cohort, rep, docker=docker, clock=clock, pristine=pristine,
-                                   work=work_dir, timing=timing)
+                                   work=work_dir, job_reruns_left=job_reruns_left, timing=timing)
+        job_reruns_left -= attempts - 1
         rep_dir = bundle / "reps" / str(rep)
         rep_dir.mkdir(parents=True)
         _dump(rep_dir / "lifecycle.json", {
