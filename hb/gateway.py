@@ -32,10 +32,14 @@ what the harness sends:
   shutdown) are `usage_unknown`.
 
 One record per POST is appended to a JSONL log
-(schemas/gateway-record.schema.json). Bodies are stored only as hashes.
+(schemas/gateway-record.schema.json). Bodies are stored only as hashes. With
+--state, a small file next to it (schemas/gateway-state.schema.json) says
+whether the attempt is void and when a request was first refused for budget,
+so the toolkit can time its early kills without reading the log.
 Standard library only, so it runs in the toolkit image without extra
-dependencies. Exit status: 0 after a clean shutdown, 1 if a record could not
-be written, 2 for bad settings, 3 if the provider could not be reached. The
+dependencies. Exit status: 0 after a clean shutdown, 1 if a record or the
+state file could not be written, 2 for bad settings, 3 if the provider could
+not be reached. The
 toolkit fails the job on any non-zero status instead of re-running the
 attempt: a full disk or exhausted host resources can be the harness's doing,
 so they must not become a re-roll.
@@ -43,7 +47,8 @@ so they must not become a re-roll.
 Usage:
     MODEL_API_KEY=... python -m hb.gateway --listen 0.0.0.0:8080 \\
         --upstream https://api.tokenfactory.nebius.com/v1/ --model <id> \\
-        --max-total-tokens N --max-calls N --upstream-retries N --log /log/gateway.jsonl
+        --max-total-tokens N --max-calls N --upstream-retries N --log /log/gateway.jsonl \\
+        --state /log/state.json
 """
 
 from __future__ import annotations
@@ -70,6 +75,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 RECORD_SCHEMA = "hb/gateway-record/1"
+STATE_SCHEMA = "hb/gateway-state/1"
 CHAT_PATH = "/v1/chat/completions"
 MODELS_PATH = "/v1/models"
 MAX_REQUEST_BYTES = 32 * 1024 * 1024
@@ -83,7 +89,7 @@ RETRYABLE_STATUSES = frozenset({408, 429})  # plus every 5xx
 ZERO_USAGE = {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}
 # Exit statuses. Any non-zero status fails the task job (the toolkit never re-runs on it).
 EXIT_OK = 0
-EXIT_LOG_FAILED = 1     # a record could not be written
+EXIT_LOG_FAILED = 1     # a record or the state file could not be written
 EXIT_BAD_SETTINGS = 2   # refused to start
 EXIT_UNREACHABLE = 3    # a request would have voided after one of its attempts could not reach the provider
 _CHUNK_SIZE = re.compile(rb"[0-9A-Fa-f]{1,8}")
@@ -194,6 +200,7 @@ class Ledger:
         self._tokens = 0
         self._calls = 0
         self._void = False
+        self.on_void = lambda: None  # called once, when the attempt becomes void
 
     def next_seq(self) -> int:
         with self._lock:
@@ -222,7 +229,10 @@ class Ledger:
 
     def mark_void(self) -> None:
         with self._lock:
+            first = not self._void
             self._void = True
+        if first:
+            self.on_void()
 
     @property
     def void(self) -> bool:
@@ -232,6 +242,54 @@ class Ledger:
     def totals(self) -> dict:
         with self._lock:
             return {"tokens": self._tokens, "calls": self._calls}
+
+
+class StateFile:
+    """What the toolkit reads while the harness runs (schemas/gateway-state.schema.json).
+
+    Two facts: whether the attempt is void, and when the gateway first refused a
+    request for budget. The toolkit times its early kills from them at a cost
+    that does not depend on what the harness does; whether the attempt is void
+    is still decided from the records after the gateway stops. Written at
+    startup, so a read never finds it missing, and replaced atomically (a
+    temporary file, then a rename), so a read always sees one whole version.
+    A write that fails later calls on_failure, and the gateway stops with exit
+    status 1 as for a record it cannot write: a full disk can be the harness's
+    doing, and a refusal missing from the file would spare it the grace-period
+    kill, so the job must fail.
+    """
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._lock = threading.Lock()
+        self._state = {"schema": STATE_SCHEMA, "void": False, "first_refusal_ms": None}
+        self.on_failure = lambda exc: None
+        self._save()  # at startup a failure raises, and the gateway does not start
+
+    def _save(self) -> None:
+        temporary = self.path.with_name(self.path.name + ".tmp")
+        temporary.write_text(json.dumps(self._state, sort_keys=True, separators=(",", ":")) + "\n",
+                             encoding="ascii")
+        os.replace(temporary, self.path)
+
+    def _change(self, key: str, value) -> None:
+        """Set a fact that is not set yet; the first value stays."""
+        with self._lock:
+            if self._state[key] is not False and self._state[key] is not None:
+                return
+            self._state[key] = value
+            try:
+                self._save()
+                return
+            except OSError as exc:
+                failure = exc
+        self.on_failure(failure)
+
+    def mark_void(self) -> None:
+        self._change("void", True)
+
+    def mark_refusal(self, at_ms: int) -> None:
+        self._change("first_refusal_ms", at_ms)
 
 
 class RecordLog:
@@ -435,10 +493,14 @@ def _error_body(kind: str, message: str, code: str | None = None) -> bytes:
 
 
 class Gateway:
-    def __init__(self, config: Config, log_path: Path):
+    def __init__(self, config: Config, log_path: Path, state_path: Path | None = None):
         self.config = config
         self.ledger = Ledger(config.max_total_tokens, config.max_calls)
         self.log = RecordLog(log_path)
+        self.state = StateFile(state_path) if state_path is not None else None
+        if self.state is not None:
+            self.ledger.on_void = self.state.mark_void
+            self.state.on_failure = self._state_write_failed
         self.fatal = False
         self.unreachable = False
         self.on_fatal = lambda: None
@@ -481,6 +543,17 @@ class Gateway:
             self.ledger.mark_void()
             self.fatal = True
             self.on_fatal()
+
+    def _state_write_failed(self, exc: OSError) -> None:
+        """The toolkit could miss a void or the start of a grace period: stop and exit 1."""
+        print(f"hb-gateway: the state file could not be written: {exc}", file=sys.stderr, flush=True)
+        self.fatal = True
+        self.on_fatal()
+
+    def note_refusal(self) -> None:
+        """A request was refused for budget. The first one starts the toolkit's grace period."""
+        if self.state is not None:
+            self.state.mark_refusal(time.time_ns() // 1_000_000)
 
     def mark_unreachable(self, reason: str) -> None:
         """The provider could not be reached: the exit status becomes 3, which fails the job."""
@@ -637,6 +710,7 @@ class Exchange:
                                _error_body("upstream_failed", "an earlier provider failure ended this attempt"),
                                {"x-should-retry": "false"})
         if decision == "exhausted":
+            self.gw.note_refusal()
             return self._local(429, "budget_exhausted",
                                _error_body("budget_exhausted", "the token or call budget for this run is spent",
                                            "insufficient_quota"),
@@ -1088,8 +1162,9 @@ def parse_listen(value: str) -> tuple[str, int]:
     return host, int(port)
 
 
-def build_server(config: Config, log_path: Path, listen: str) -> GatewayServer:
-    return GatewayServer(parse_listen(listen), Gateway(config, Path(log_path)))
+def build_server(config: Config, log_path: Path, listen: str, state_path: Path | None = None) -> GatewayServer:
+    gateway = Gateway(config, Path(log_path), Path(state_path) if state_path is not None else None)
+    return GatewayServer(parse_listen(listen), gateway)
 
 
 def shutdown(server: GatewayServer, drain_s: float) -> int:
@@ -1128,6 +1203,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                         help="on SIGTERM, how long to wait for requests in flight before recording them as abandoned")
     parser.add_argument("--upstream-ca-file", default=None, help="extra CA bundle for the upstream TLS check")
     parser.add_argument("--log", required=True, type=Path, help="JSONL file to append records to")
+    parser.add_argument("--state", type=Path, default=None,
+                        help="small JSON file the toolkit polls: the void flag and the first budget refusal")
     return parser.parse_args(argv)
 
 
@@ -1151,7 +1228,7 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     try:
         config = config_from_args(args, os.environ.get("MODEL_API_KEY", ""))
-        server = build_server(config, args.log, args.listen)
+        server = build_server(config, args.log, args.listen, args.state)
     except (ConfigError, OSError, ssl.SSLError) as exc:
         print(f"hb-gateway: {exc}", file=sys.stderr)
         return EXIT_BAD_SETTINGS

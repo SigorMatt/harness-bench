@@ -114,6 +114,7 @@ def gateway_run_args(names: dict, cohort: dict, toolkit_image: str, upstream_ret
         "--upstream-retries", str(upstream_retries),
         "--drain-s", str(GATEWAY_DRAIN_SECONDS),
         "--log", "/log/gateway.jsonl",
+        "--state", "/log/state.json",
     ]
 
 

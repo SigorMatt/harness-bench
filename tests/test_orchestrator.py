@@ -21,7 +21,7 @@ from hb.dockercli import DockerError
 from hb.grade import run_probe_unsandboxed_for_tests
 from hb.manifest import extract_bundle, verify_task_bundle
 from hb.orchestrator import (
-    DockerProbeRunner, GatewayFailed, RecordTail, RerunsExhausted, RunTaskError, TaskJob, Timing, parse_records,
+    DockerProbeRunner, GatewayFailed, RerunsExhausted, RunTaskError, TaskJob, Timing, parse_records, parse_state,
     run_task,
 )
 from hb.schemas import validate
@@ -68,7 +68,8 @@ class Script:
     workspace: dict = field(default_factory=lambda: {"pager.py": FIXED, "tests/test_pager.py": None})
     output: bytes = b"harness: done\n"
     stops_before_kill: bool = False      # exits by itself just as the toolkit kills it
-    log_copy_s: float = 0.0              # how long reading the gateway log takes
+    state_copy_s: float = 0.0            # how long reading the gateway's state file takes
+    state_read_fails: bool = False       # every read of the state file fails
 
 
 class FakeClock:
@@ -170,14 +171,25 @@ class FakeDocker:
                 else:
                     info.size = len(data)
                     tar.addfile(info, io.BytesIO(data))
-            if path == orchestrator.GATEWAY_LOG:
-                if names["gateway"] not in self.stopped and script.log_copy_s:
-                    self.clock.t += min(script.log_copy_s, timeout)
-                    if script.log_copy_s > timeout:
-                        raise DockerError("timed out copying the log")
+            if path == orchestrator.GATEWAY_STATE:
+                if script.state_read_fails:
+                    raise DockerError("cannot read the state file")
+                if script.state_copy_s:
+                    self.clock.t += min(script.state_copy_s, timeout)
+                    if script.state_copy_s > timeout:
+                        raise DockerError("timed out copying the state file")
+            if path in (orchestrator.GATEWAY_LOG, orchestrator.GATEWAY_STATE):
                 start = self.started.get(names["harness"])
                 visible = [(t, o) for t, o in script.records
                            if names["gateway"] in self.stopped or (start is not None and self.clock.t >= start + t)]
+            if path == orchestrator.GATEWAY_STATE:
+                refusals = [start + t for t, o in visible if o == "budget_exhausted"]
+                add("state.json", json.dumps({
+                    "schema": "hb/gateway-state/1",
+                    "void": any(o == "upstream_failed" for _, o in visible),
+                    "first_refusal_ms": int(round(min(refusals) * 1000)) if refusals else None,
+                }).encode())
+            elif path == orchestrator.GATEWAY_LOG:
                 add("gateway.jsonl", b"".join(
                     json.dumps(record(i, o, int(round((start + t) * 1000)) - 10)).encode() + b"\n"
                     for i, (t, o) in enumerate(visible)))
@@ -336,9 +348,10 @@ def test_harness_that_stops_as_it_is_killed_counts_as_exited(tmp_path):
     assert (lifecycle["termination"], lifecycle["exit_code"]) == ("exited", 0)
 
 
-@pytest.mark.parametrize("log_copy_s", [7.0, 0.7])  # 0.7: the last read starts with under a second left
-def test_slow_log_reads_do_not_delay_the_wall_clock_kill(tmp_path, log_copy_s):
-    _, out = run(tmp_path, {(1, 1): Script(exit_at=None, log_copy_s=log_copy_s)}, reps=1, budget__wall_seconds=60)
+@pytest.mark.parametrize("state_copy_s", [7.0, 0.7])  # 0.7: the last read starts with under a second left
+def test_slow_state_reads_do_not_delay_the_wall_clock_kill(tmp_path, state_copy_s):
+    _, out = run(tmp_path, {(1, 1): Script(exit_at=None, state_copy_s=state_copy_s)}, reps=1,
+                 budget__wall_seconds=60)
     lifecycle = rep_file(out, 1, "lifecycle.json")
     assert lifecycle["termination"] == "wall_timeout"
     assert 60_000 <= lifecycle["ended_at_ms"] - lifecycle["started_at_ms"] <= 60_010  # the last read was cut short
@@ -354,7 +367,7 @@ def test_void_attempt_is_run_again_in_fresh_containers(tmp_path):
     assert lifecycle["attempts"] == 2 and lifecycle["termination"] == "exited"
     assert b"upstream_failed" not in rep_file(out, 1, "gateway.jsonl")
     first = profile.rep_names(TASK_ID, 1, 1)
-    assert ["kill", first["harness"]] in docker.calls  # ended as soon as the void showed in the log
+    assert ["kill", first["harness"]] in docker.calls  # ended as soon as the state file showed the void
     assert docker.killed[first["harness"]] - docker.started[first["harness"]] == pytest.approx(2.0)
     assert any(first["workspace"] in volumes for _, _, volumes in docker.removed)
 
@@ -464,20 +477,39 @@ def test_unknown_task_is_refused(tmp_path):
                  work_dir=tmp_path / "w")
 
 
-def test_record_tail_reads_complete_lines_once():
-    tail = RecordTail()
-    ok = json.dumps(record(0, "ok")).encode()
-    refused = json.dumps(record(1, "budget_exhausted", started_ms=5000)).encode()
-    later = json.dumps(record(2, "budget_exhausted", started_ms=9000)).encode()
-    tail.feed(ok + b"\n" + refused[:20])
-    assert tail.first_refusal_ms is None and tail.offset == len(ok) + 1
-    tail.feed(ok + b"\n" + refused + b"\n" + later + b"\n")
-    assert tail.first_refusal_ms == 5010 and not tail.void  # the first refusal's answer
-    tail.feed(b"")  # a failed or shorter read changes nothing
-    assert tail.first_refusal_ms == 5010
-    odd = RecordTail()
-    odd.feed(json.dumps({**record(0, "budget_exhausted"), "started_at_ms": "soon"}).encode() + b"\n")
-    assert odd.first_refusal_ms is None  # skipped; the final parse of the log decides
+def test_parse_state_accepts_only_the_gateway_state_format():
+    good = {"schema": "hb/gateway-state/1", "void": False, "first_refusal_ms": None}
+    assert parse_state(json.dumps(good).encode()) == good
+    assert parse_state(json.dumps({**good, "void": True, "first_refusal_ms": 5}).encode())["void"] is True
+    for bad in (b"", b"[]", b"\xff", json.dumps({**good, "void": 1}).encode(),
+                json.dumps({**good, "first_refusal_ms": -1}).encode(),
+                json.dumps({**good, "first_refusal_ms": True}).encode(),
+                json.dumps({**good, "schema": "hb/gateway-state/2"}).encode(),
+                json.dumps({**good, "extra": 1}).encode()):
+        with pytest.raises(ValueError):
+            parse_state(bad)
+
+
+def test_the_log_is_copied_once_per_attempt_and_the_state_file_is_polled(tmp_path):
+    docker, out = run(tmp_path, {(1, 1): Script(exit_at=None, records=[(1.0, "ok")] * 50)}, reps=1,
+                      budget__wall_seconds=60)
+    gateway = profile.rep_names(TASK_ID, 1, 1)["gateway"]
+    log_reads = [c for c in docker.calls if c == ["copy_out", gateway, orchestrator.GATEWAY_LOG]]
+    state_reads = [c for c in docker.calls if c == ["copy_out", gateway, orchestrator.GATEWAY_STATE]]
+    assert len(log_reads) == 1  # after the gateway stopped, whatever its size
+    assert len(state_reads) >= 25  # every poll reads only the small file
+    assert len(rep_file(out, 1, "gateway.jsonl").splitlines()) == 50
+
+
+def test_an_unreadable_state_only_delays_early_kills(tmp_path, capsys):
+    # The void kill waits for the wall clock, and the final log still makes the attempt void.
+    scripts = {(1, 1): Script(exit_at=None, records=[(1.0, "upstream_failed")], state_read_fails=True),
+               (1, 2): Script()}
+    docker, out = run(tmp_path, scripts, reps=1, budget__wall_seconds=60)
+    assert rep_file(out, 1, "lifecycle.json")["attempts"] == 2
+    first = profile.rep_names(TASK_ID, 1, 1)["harness"]
+    assert docker.killed[first] - docker.started[first] == pytest.approx(60.0, abs=0.01)
+    assert capsys.readouterr().err.count("state could not be read 5 times in a row") == 1
 
 
 def test_parse_records_refuses_anything_malformed():

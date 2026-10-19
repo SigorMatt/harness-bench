@@ -110,6 +110,8 @@ def test_gateway_has_limits_and_drains_for_the_planned_time():
     assert flag_values(args, "--log-driver") == ["json-file"]
     assert sorted(flag_values(args, "--log-opt")) == ["max-file=2", "max-size=8m"]
     assert flag_values(args, "--mount") == [f"type=volume,src={NAMES['gateway_log']},dst=/log"]
+    assert flag_values(args, "--log") == ["/log/gateway.jsonl"]
+    assert flag_values(args, "--state") == ["/log/state.json"]  # what the toolkit polls
 
 
 def probe_args():

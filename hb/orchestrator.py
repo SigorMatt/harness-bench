@@ -10,7 +10,8 @@ For each rep attempt (container arguments come from hb/profile.py):
 4. Create and start the harness, then watch it until it exits or is killed:
    at the wall-clock limit (termination `wall_timeout`); a grace period after
    the gateway first refuses a request for budget (`budget_exhausted`); or as
-   soon as the gateway log shows a void (`upstream_failed`).
+   soon as the attempt is void. Both early kills are timed from the gateway's
+   small state file, never from the growing log.
 5. Stop the gateway with a timeout longer than its drain period. A non-zero
    exit status fails the job: it means records could not be written, the
    provider could not be reached, or the gateway was killed. A full disk,
@@ -53,6 +54,7 @@ from .tree import materialize
 
 LIFECYCLE_SCHEMA = "hb/lifecycle/1"
 GATEWAY_LOG = "/log/gateway.jsonl"
+GATEWAY_STATE = "/log/state.json"
 LISTENING = b"hb-gateway listening on "
 OUTCOMES = frozenset({"ok", "upstream_rejected", "budget_exhausted", "bad_request", "usage_unknown",
                       "upstream_failed"})
@@ -63,7 +65,8 @@ MAX_WORKSPACE_ENTRIES = 200_000
 MAX_GATEWAY_LOG_BYTES = 256 << 20
 MAX_HARNESS_LOG_BYTES = 32 << 20
 PROBE_START_SLACK_S = 10
-LOG_READ_TIMEOUT_S = 30  # one read of the gateway log while the harness runs
+STATE_READ_TIMEOUT_S = 30  # one read of the gateway's state file while the harness runs
+MAX_STATE_BYTES = 4096
 
 
 class RunTaskError(Exception):
@@ -126,41 +129,51 @@ def _dump(path: Path, value) -> None:
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
 
 
-# ----------------------------------------------------------- gateway records
+# -------------------------------------------------------- gateway state and records
 
 
-class RecordTail:
-    """Follows a growing gateway log during an attempt.
+STATE_SCHEMA = "hb/gateway-state/1"
 
-    Only complete lines are read, and each only once. This is for reacting
-    early; the decision on a void is made from the final log after the
-    gateway has stopped (parse_records).
+
+def parse_state(data: bytes) -> dict:
+    """Parse the gateway's state file (schemas/gateway-state.schema.json). Raises ValueError."""
+    state = json.loads(data)
+    if not isinstance(state, dict) or set(state) != {"schema", "void", "first_refusal_ms"}:
+        raise ValueError("not a gateway state")
+    refusal = state["first_refusal_ms"]
+    if (state["schema"] != STATE_SCHEMA or type(state["void"]) is not bool
+            or not (refusal is None or (type(refusal) is int and refusal >= 0))):
+        raise ValueError("not a gateway state")
+    return state
+
+
+class StatePoller:
+    """Reads the gateway's state file while the harness runs.
+
+    The file is small and bounded, so a read costs the same whatever the
+    harness makes the gateway log. It only times the early kills: a read that fails
+    delays them, and a void is decided from the final log in any case.
+    Failures in a row are reported once.
     """
 
-    def __init__(self):
-        self.offset = 0
-        self.void = False
-        self.first_refusal_ms = None  # when the gateway answered its first budget refusal
+    REPORT_AFTER = 5
 
-    def feed(self, data: bytes) -> None:
-        end = data.rfind(b"\n") + 1
-        if end <= self.offset:
-            return
-        for line in data[self.offset:end].splitlines():
-            try:
-                record = json.loads(line)
-            except ValueError:
-                continue
-            outcome = record.get("outcome") if isinstance(record, dict) else None
-            self.void |= outcome == "upstream_failed"
-            if outcome == "budget_exhausted":
-                started, duration = record.get("started_at_ms"), record.get("duration_ms")
-                if not (type(started) is int and type(duration) is int):
-                    continue  # malformed; the final parse of the log decides
-                answered = started + duration
-                if self.first_refusal_ms is None or answered < self.first_refusal_ms:
-                    self.first_refusal_ms = answered
-        self.offset = end
+    def __init__(self, docker: Docker, gateway: str):
+        self.docker, self.gateway = docker, gateway
+        self.failures = 0
+
+    def read(self, timeout: float) -> dict | None:
+        try:
+            with self.docker.copy_out(self.gateway, GATEWAY_STATE, timeout=timeout) as stream:
+                state = parse_state(read_single_file(stream, max_bytes=MAX_STATE_BYTES))
+        except (DockerError, TransferError, ValueError) as exc:
+            self.failures += 1
+            if self.failures == self.REPORT_AFTER:
+                _stderr(f"warning: the gateway's state could not be read {self.failures} times in a row ({exc}); "
+                        "early kills wait for a good read, and the final log still decides a void")
+            return None
+        self.failures = 0
+        return state
 
 
 def parse_records(data: bytes) -> list[dict]:
@@ -184,13 +197,6 @@ def _read_gateway_log(docker: Docker, gateway: str, timeout: float = DEFAULT_TIM
         return read_single_file(stream, max_bytes=MAX_GATEWAY_LOG_BYTES)
 
 
-def _poll_records(docker: Docker, gateway: str, tail: RecordTail, timeout: float) -> None:
-    try:
-        tail.feed(_read_gateway_log(docker, gateway, timeout))
-    except (DockerError, TransferError):
-        pass  # a copy can fail while the log grows; the final read after the gateway stops decides
-
-
 # ------------------------------------------------------------------ attempt
 
 
@@ -210,7 +216,7 @@ def _wait_listening(docker: Docker, clock: Clock, gateway: str, timing: Timing) 
 
 
 GATEWAY_EXITS = {
-    EXIT_LOG_FAILED: "it could not write a record (for example, the disk is full), or it crashed",
+    EXIT_LOG_FAILED: "it could not write a record or its state file (for example, the disk is full), or it crashed",
     EXIT_UNREACHABLE: "the provider could not be reached (an attempt failed before its request was sent)",
 }
 
@@ -240,8 +246,9 @@ def _kill_and_wait(docker: Docker, clock: Clock, name: str, timing: Timing) -> b
 def _watch_harness(docker: Docker, clock: Clock, names: dict, wall_seconds: int, timing: Timing) -> dict:
     """Start the harness and wait until it exits or is killed. Returns lifecycle facts.
 
-    Deadlines are checked before the gateway log is read, and the read is
-    bounded by the time left, so a large log cannot delay a kill. A harness
+    The early kills (a void, the budget grace period) are timed from the
+    gateway's state file. Deadlines are checked before it is read, and the read
+    is bounded by the time left, so a slow read cannot delay a kill. A harness
     that stopped by itself before the kill landed is `exited`.
     """
     harness, gateway = names["harness"], names["gateway"]
@@ -250,7 +257,7 @@ def _watch_harness(docker: Docker, clock: Clock, names: dict, wall_seconds: int,
     docker.check(["docker", "start", harness])
     wall_deadline = start + wall_seconds
     grace_deadline = None
-    tail = RecordTail()
+    poller = StatePoller(docker, gateway)
     termination = None
     while termination is None:
         states = docker.states([harness, gateway])
@@ -266,14 +273,14 @@ def _watch_harness(docker: Docker, clock: Clock, names: dict, wall_seconds: int,
         else:
             next_deadline = wall_deadline if grace_deadline is None else min(wall_deadline, grace_deadline)
             # Positive: both deadlines were checked above. No floor, or a read could run past them.
-            _poll_records(docker, gateway, tail, timeout=min(LOG_READ_TIMEOUT_S, next_deadline - now))
-            if tail.void:
+            state = poller.read(timeout=min(STATE_READ_TIMEOUT_S, next_deadline - now)) or {}
+            if state.get("void"):
                 _kill_and_wait(docker, clock, harness, timing)
                 termination = "exited"  # the attempt is void; its lifecycle is discarded
                 break
-            if tail.first_refusal_ms is not None and grace_deadline is None:
-                # The grace period runs from the gateway's answer, not from when the log was read.
-                since_s = max(0, clock.now_ms() - tail.first_refusal_ms) / 1000
+            if state.get("first_refusal_ms") is not None and grace_deadline is None:
+                # The grace period runs from the gateway's refusal, not from when the file was read.
+                since_s = max(0, clock.now_ms() - state["first_refusal_ms"]) / 1000
                 grace_deadline = clock.monotonic() + timing.budget_grace_s - since_s
                 next_deadline = min(wall_deadline, grace_deadline)
             clock.sleep(max(0.0, min(timing.poll_s, next_deadline - clock.monotonic())))
