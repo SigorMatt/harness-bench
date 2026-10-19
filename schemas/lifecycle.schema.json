@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:hb:schema:lifecycle:1",
   "title": "Rep lifecycle (reps/<n>/lifecycle.json)",
-  "description": "Written by the toolkit after the harness container is gone. An attempt that hit an upstream error is re-run or fails the job, so sealed bundles have no infra-error terminations.",
+  "description": "Written by the toolkit after the harness container has stopped. An attempt that hit an upstream error is re-run or fails the job, so sealed bundles have no infra-error terminations.",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "task_id", "rep", "attempts", "harness_image", "started_at_ms", "ended_at_ms", "termination", "exit_code"],

@@ -99,20 +99,23 @@ jobs:
           HB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           mkdir -p "$RUNNER_TEMP/out"
-          # The toolkit is trusted code pinned by digest. It alone gets the Docker
-          # socket and the API key. Per rep and attempt it creates an internal
-          # network, a gateway and a harness container using hb/profile.py, enforces
-          # the wall-clock limit, snapshots the workspace (regular files only, no
-          # .git), diffs it against pristine, grades it, and finally writes
+          # The toolkit is trusted code pinned by digest (hb/orchestrator.py). It
+          # alone gets the Docker socket and the API key. Per rep and attempt it
+          # creates an internal network, a gateway and a harness container using
+          # hb/profile.py, enforces the wall-clock limit and the budget grace period,
+          # snapshots the workspace (regular files only, no .git), diffs it against
+          # pristine, grades it in the probe sandbox, and finally writes
           # /out/task-bundle-$TASK_ID.tar. Sibling containers are created through the
-          # host daemon, so they use named volumes; only the paths below are host binds.
-          # Attempts that hit an upstream error are re-run under the suite's infra
-          # rules; if a rep still fails, this step fails and the run cannot be sealed.
-          docker run --rm \
+          # host daemon from $HB_TOOLKIT_IMAGE, so they use named volumes; only the
+          # paths below are host binds. Attempts the gateway voids are re-run under
+          # the suite's infra rules; anything else that goes wrong fails this step,
+          # and the run cannot be sealed. --init forwards a cancellation's SIGTERM,
+          # so the toolkit removes its containers before it exits.
+          docker run --rm --init \
             --mount "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock" \
             --mount "type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/out,dst=/out" \
-            --env HARNESS_ID --env TASK_ID --env MODEL_API_KEY \
+            --env HARNESS_ID --env TASK_ID --env MODEL_API_KEY --env HB_TOOLKIT_IMAGE \
             --env HB_REPOSITORY --env HB_RUN_ID --env HB_RUN_ATTEMPT \
             "$HB_TOOLKIT_IMAGE" run-task --suite /suite --out /out
 

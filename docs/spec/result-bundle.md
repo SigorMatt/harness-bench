@@ -20,8 +20,10 @@ exactly three kinds of check:
 
 It never searches for evidence of tampering, so no part of the system needs
 adversarial testing to be trusted. Tests are functional: determinism, schema
-conformance, fixture-based negative cases for our own parsers, and assertions on
-generated container configuration ([`tests/test_profile.py`](../../tests/test_profile.py)).
+conformance, fixture-based negative cases for our own parsers, assertions on
+generated container configuration ([`tests/test_profile.py`](../../tests/test_profile.py)),
+and end-to-end runs of the toolkit against a real Docker daemon that check what
+it produces ([`tests/test_run_task_docker.py`](../../tests/test_run_task_docker.py)).
 Isolation is verified by asserting on configuration, never by probing a sandbox.
 
 Where a property cannot be made true by construction, this spec says so and
@@ -35,12 +37,12 @@ bounds it (§10) instead of adding detection.
 | I2 | Model, endpoint, suite, budgets, limits and the harness are fixed by the release. | The reusable workflow pins the toolkit and suite images by digest. Its only input is a harness id, looked up in the registry baked into the toolkit image, which pins each harness image by digest. |
 | I3 | Every model request is served by the pinned model. | The gateway has exactly one upstream and overwrites the request's `model` field. The harness has no other network route (I4). |
 | I4 | The harness holds no authority beyond its workspace. | Container profile (§6): internal-only network shared with the gateway alone, placeholder API key, no Docker socket, read-only root, no capabilities, non-root user, fixed CPU, memory and process limits. |
-| I5 | The harness cannot write trusted records. | The gateway log and lifecycle record live on volumes that are never mounted into the harness container. Bundles are assembled after the harness container is gone. |
+| I5 | The harness cannot write trusted records. | The gateway log lives on a volume that is never mounted into the harness container, and the lifecycle record is written by the toolkit, in no container the harness can reach. Bundles are assembled after the harness container has stopped. |
 | I6 | Nothing in the workspace's `.git` is ever executed or consulted. | The snapshot copies regular files only and skips `.git` at any depth. Diffs are computed with `git diff --no-index` on toolkit-made copies, outside any repository, with system and global config disabled. |
 | I7 | Scores are derived, never declared. | The aggregator re-grades every rep from its patch. The `grade.json` inside a bundle is advisory. |
 | I8 | The code under test cannot decide its own verdict. | Probes run next to the patched code and only emit observations. Expected values and the comparison stay in the trusted grader process (§7). |
 | I9 | Edits to tests and interpreter hook files cannot make a rep pass. | Protected paths are restored from pristine before probing. The edits still count as edits: out of scope wherever the task's scope excludes them. |
-| I10 | A result is one complete, first-attempt run, accepted once, under the identity it was submitted as. | The seal job runs only if every task job succeeded. Acceptance requires the signed run identity to equal the submitted repository and run id, `run_attempt = 1` and the full task list, and deduplicates on (repository, run id). Infra re-runs happen only when the gateway voids an attempt, and it voids only on provider-side or setup failures, never on anything that depends only on the harness's own behaviour (§5.2). Re-runs run inside the job and are capped per rep and per run. |
+| I10 | A result is one complete, first-attempt run, accepted once, under the identity it was submitted as. | The seal job runs only if every task job succeeded. Acceptance requires the signed run identity to equal the submitted repository and run id, `run_attempt = 1` and the full task list, and deduplicates on (repository, run id). Infra re-runs happen only when the gateway voids an attempt, and it voids only on provider-side or setup failures, never on anything that depends only on the harness's own behaviour (§5.2). Failures a harness could cause, such as a gateway that exits with an error, fail the job instead (§6.1). Re-runs run inside the job and are capped per rep and per run. |
 | I11 | Identifiers cannot disagree with content. | IDs are `content_id()` of canonical JSON (§3.1) and are always recomputed, never accepted as claims. |
 | I12 | Known caches are never counted as edits. | The suite's `ignore_paths` (bytecode, test-runner caches) are dropped when the workspace is snapshotted and again when a patch is applied. Anything else left in `/workspace` is part of the patch, so the adapter contract keeps harness state under `$HOME` (§6). |
 
@@ -161,11 +163,20 @@ size of its bundle archive ([`schemas/run-manifest.schema.json`](../../schemas/r
 
 ### 5.1 `lifecycle.json`
 
-`termination` is one of `exited`, `wall_timeout` or `budget_exhausted`. There is
-no infra-error value: an attempt the gateway voided (§5.2) is re-run with a
-fresh network, gateway and workspace, up to `infra.max_reruns_per_rep` times, or
-the job fails. Sealed bundles therefore cannot contain one. `attempts` records
-how many attempts the rep took. The task job's timeout is derived from the suite
+`termination` is one of:
+
+- `exited`: the harness's entrypoint exited by itself, whatever its status;
+- `wall_timeout`: the toolkit killed it at the suite's wall-clock limit;
+- `budget_exhausted`: the toolkit killed it 30 seconds after the gateway first
+  refused one of its requests for budget (a harness that exits within that
+  grace period is `exited`).
+
+`exit_code` is the container's exit status (137 after a kill). The timestamps
+are taken by the toolkit just before it starts the harness and when it sees
+the harness stopped. There is no infra-error value: an attempt the gateway
+voided (§5.2) is re-run with a fresh network, gateway and workspace, up to
+`infra.max_reruns_per_rep` times, or the job fails. Sealed bundles therefore
+cannot contain one. `attempts` records how many attempts the rep took. The task job's timeout is derived from the suite
 (`hb.plan.task_job_timeout_minutes`): every rep using every allowed attempt
 fits, and a suite that cannot fit in a GitHub-hosted job fails at planning.
 
@@ -237,8 +248,14 @@ attempt becomes void, recorded as `upstream_failed`, when:
 - the connection fails or closes after the request was fully sent and before any response (it is not retried, see above);
 - the provider answers with any status other than 200, 400, 413, 422 or a retryable one — 401, 403 and 404 mean the key, model id or base URL is wrong, which is a setup fault, not a harness result;
 - a stream breaks off (the connection fails or closes early; a read timeout is `usage_unknown` instead), or a response carries no usage the gateway can count;
-- the gateway itself faults after admitting a request;
-- a record cannot be written. The gateway then stops and exits with status 1.
+- the gateway itself faults after admitting a request.
+
+**A record that cannot be written fails the job.** The gateway then refuses
+further chat requests, stops and exits with status 1. Its log is incomplete,
+and the usual cause, a full disk, can be brought about by the harness, so the
+toolkit does not re-run the attempt: it fails the job, and the run cannot be
+sealed. The same holds for any other non-zero exit status, for example a
+gateway killed at its memory limit (§6.1).
 
 **`usage_unknown`: the gateway stopped waiting, and the attempt goes on.** A
 forwarded request is recorded as `usage_unknown` when the gateway stops waiting
@@ -278,9 +295,8 @@ locally (HTTP 502, `upstream_failed`, `upstream_attempts: 0`,
 the cut-off answer as complete. The void and the record are in place before that
 event is sent, so a client that reacts to it is answered locally. Stream headers are sent only with the first
 event, so a stream that fails before producing anything gets a plain 502. The
-toolkit ends a void attempt and re-runs it under §5.1 (it also treats a
-non-zero gateway exit status as a void), so sealed bundles contain no
-`upstream_failed` records.
+toolkit ends a void attempt as soon as the record appears in the log, and
+re-runs it under §5.1, so sealed bundles contain no `upstream_failed` records.
 
 Provider rejections (`upstream_rejected`) are passed through unchanged and do
 not void the attempt: reacting to them, for example by compacting context, is
@@ -316,15 +332,22 @@ rep attempt:
 
 ```
 docker network create --internal <net>
+docker volume create <ws>; docker volume create <task>; docker volume create <gwlog>
+docker create --name <helper> --network none \
+  --mount type=volume,src=<ws>,dst=/workspace --mount type=volume,src=<task>,dst=/task \
+  <toolkit@digest>
 docker run --detach --name <gw> --network bridge --read-only --cap-drop ALL \
   --security-opt no-new-privileges --user 10002:10002 \
+  --memory 2048m --memory-swap 2048m --pids-limit 1024 --ulimit nofile=8192:8192 \
+  --log-driver json-file --log-opt max-size=8m --log-opt max-file=2 \
   --mount type=volume,src=<gwlog>,dst=/log --env MODEL_API_KEY \
-  <toolkit@digest> gateway --upstream <base_url> --model <model_id> ...
+  <toolkit@digest> gateway --upstream <base_url> --model <model_id> --drain-s 120 ...
 docker network connect --alias gateway <net> <gw>
-docker run --rm --name <harness> --network <net> \
+docker create --name <harness> --network <net> \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1024m \
   --user 10001:10001 --cap-drop ALL --security-opt no-new-privileges \
   --cpus 2.000 --memory 8192m --memory-swap 8192m --pids-limit 512 \
+  --log-driver json-file --log-opt max-size=8m --log-opt max-file=2 \
   --mount type=volume,src=<ws>,dst=/workspace \
   --mount type=volume,src=<task>,dst=/task,readonly \
   --workdir /workspace \
@@ -332,12 +355,30 @@ docker run --rm --name <harness> --network <net> \
   --env OPENAI_API_KEY=hb-no-credential --env HB_MODEL=<model_id> \
   --env HB_TASK_FILE=/task/instruction.md \
   <harness image@digest> /hb/entrypoint
+docker start <harness>
 ```
 
 - `--env MODEL_API_KEY` names the variable only, so the key never appears in an
   argument list or a log line.
+- Sibling containers are created through the host's daemon and cannot see the
+  toolkit's files, so trees travel as tar streams (`hb/transfer.py`). The
+  helper container mounts the workspace and task volumes and is never started:
+  the pristine repository (owned by the harness user) and the instruction are
+  copied into it with `docker cp --archive`, and the workspace is copied out of
+  it after the harness has stopped. A new volume takes its owner from the
+  toolkit image's directory at its mount point, which is how `/workspace`
+  belongs to the harness user and `/log` to the gateway user.
 - The gateway log volume is mounted only into the gateway; the toolkit copies
   it out after the rep (I5).
+- A harness can open many connections to the gateway. Each holds one thread
+  and at most three file descriptors, and the descriptor limit is pinned at
+  more than three times the thread limit. A flood therefore always meets the
+  thread limit first, which turns new connections away before any request is
+  admitted. It can never make an admitted request's upstream connection fail
+  for lack of descriptors, which would void the attempt (§5.2).
+- The harness container is created and started rather than run with `--rm`, so
+  its exit status and output can be read after it stops. Its output, like the
+  gateway's, is capped by the log options, so it cannot fill the runner's disk.
 - Every rep attempt gets its own network, gateway and workspace, so reps cannot
   see each other and budgets reset by construction.
 - Every task runs in its own job, so on a fresh GitHub-hosted runner VM.
@@ -345,11 +386,45 @@ docker run --rm --name <harness> --network <net> \
 **Adapter contract.** A harness image reads the instruction from
 `$HB_TASK_FILE`, works in `/workspace`, uses the OpenAI-compatible endpoint at
 `$OPENAI_BASE_URL` with model `$HB_MODEL`, runs without prompts and exits when
-done. It keeps its own state (history, caches, config) under `$HOME`, not in
+done. `/workspace` holds the task's repository without a `.git` directory; a
+harness that needs one creates it (`.git` is never part of the snapshot). It
+keeps its own state (history, caches, config) under `$HOME`, not in
 `/workspace`: anything left in `/workspace` is part of the patch unless it
 matches the suite's `ignore_paths`. Telemetry and update checks are switched off
 (there is no route for them anyway). That is the whole adapter: a thin image
 layer and an entrypoint script.
+
+### 6.1 Running a rep
+
+`hb.orchestrator` (`python3 -m hb run-task` in the toolkit image) runs every rep
+of one task in turn:
+
+1. Set up the attempt as above and wait until the gateway listens.
+2. Start the harness and watch it. It is killed at the wall-clock limit, 30
+   seconds after the gateway first refuses one of its requests for budget, or
+   as soon as an `upstream_failed` record appears in the gateway log (§5.1).
+3. Stop the gateway with `docker stop --time 150`, longer than its 120-second
+   drain. Copy out `gateway.jsonl`. If any record is `upstream_failed`, the
+   attempt is void: it is discarded and the rep runs again in fresh containers.
+4. Copy out the harness's output and its workspace. The snapshot keeps
+   directories, regular files and hard links to them, and skips everything else
+   (I6). It is diffed against pristine with `hb.patch.workspace_diff`.
+5. Remove the attempt's containers, network and volumes, and the toolkit's
+   local copies of its files, whatever happened.
+6. Grade the rep (§7), remove the grading copies, write its five files, and
+   after the last rep write the manifest and the archive
+   `task-bundle-<task>.tar`.
+
+**What fails the job.** Anything the toolkit cannot trust or finish: a Docker
+command that fails or times out, a gateway that does not start, stops while the
+harness runs or exits with a non-zero status, a malformed gateway log, a void
+on every allowed attempt, or a probe sandbox that cannot start. A harness can
+cause some of these, for example by filling the disk or by leaving more than
+the toolkit accepts: 1 GiB of files or 200,000 entries in `/workspace`, or a
+gateway log over 256 MiB. That is why they fail the job, which loses the whole
+run, instead of voiding the attempt, which would re-roll one rep. The gateway's
+memory and process limits keep a harness that floods it from taking the runner
+down.
 
 ## 7. Grading
 
@@ -363,8 +438,12 @@ the aggregator (authoritative):
 3. Record which files differ from pristine (for scope). This happens before the
    next step, so edits to protected paths count as edits.
 4. Restore protected paths from pristine.
-5. Run the probe in a sandbox container: patched tree read-only, no network, a
-   time limit, a fresh process. The probe keeps a private copy of stdout for its
+5. Run the probe in a sandbox container (`hb.orchestrator.DockerProbeRunner`):
+   the toolkit image, a fresh volume holding the patched tree, the probe and its
+   inputs, mounted read-only; no network, no capabilities, a non-root user,
+   fixed CPU, memory and process limits, a time limit, and no log driver. The
+   report is read from the attached stdout, at most 1 MiB; a probe over its time
+   or that limit returns empty output. The probe keeps a private copy of stdout for its
    report and points file descriptor 1 at stderr before importing the code, so
    anything the code prints cannot corrupt the report. It reports observations —
    return values or exception type names — as JSON.
@@ -485,6 +564,34 @@ protected-path restores, out-of-scope edits and infra re-runs.
   shows the count next to the token totals. Converting non-streaming requests to
   streaming upstream would remove the timeout case, but it would change what
   reaches the provider and is left for later.
+- **Host-wide resources a harness can fill.** Some kernel resources are shared
+  by every container on the runner, such as the connection-tracking table
+  behind Docker's networking. A harness that floods the gateway's address with
+  packets might fill it, so that the gateway's next connection to the provider
+  fails before the request is sent and the attempt is voided. This is bounded
+  like provider errors a request can provoke: re-runs are capped per rep and
+  per run, and the leaderboard shows each cell's re-run rate. Removing it by
+  construction, by dropping every harness packet except TCP to the gateway's
+  port before it is tracked, or by failing the job instead of voiding when a
+  connection fails before the request is sent, is an open design decision.
+- **Early kills depend on reading the gateway log.** The kill on a void and the
+  kill 30 seconds after the first budget refusal (§6.1) come from copying
+  `gateway.jsonl` out of the gateway every 2 seconds while the harness runs.
+  Each copy reads the whole log, up to 256 MiB and for at most 30 seconds, and
+  a copy that fails is ignored, so a harness that makes the gateway write many
+  records slows these copies down. A void is still decided from the final log
+  after the gateway stops, so a missed copy only delays its kill. The grace
+  period runs from the gateway's answer, so a late copy does not lengthen it;
+  only if no copy succeeds from the first refusal on does the harness run to
+  its wall-clock limit (`wall_timeout`), and then without the model, since
+  every later request is refused for budget. A log over 256 MiB fails the job.
+  Reading only the part of the log written since the last copy would remove
+  the slowdown; it needs a way to read part of a file in the gateway's volume
+  and is left for later.
+- **Job failures a harness can cause.** A harness can make its own task job
+  fail (§6.1), for example by filling the runner's disk. That loses the whole
+  run, so it is never a way to re-roll a rep; at most it is a costly form of the
+  best-of-N whole runs above.
 
 ## 11. Versioning
 
@@ -504,6 +611,10 @@ cohort.
 | `hb/patch.py` | workspace diff and patch application outside any repository |
 | `hb/profile.py` | container profiles as data |
 | `hb/gateway.py` | model gateway: single upstream, budgets, retries, usage accounting, records |
+| `hb/orchestrator.py` | run-task: rep attempts, wall clock and budget grace, voids and re-runs, probe sandbox, task bundle |
+| `hb/transfer.py` | tar streams into and out of containers: packing toolkit trees, the workspace snapshot |
+| `hb/dockercli.py` | Docker CLI calls as argument lists with timeouts, and the clock |
+| `hb/cli.py` | `python3 -m hb gateway` and `run-task` in the toolkit image; inputs from the environment |
 | `hb/plan.py` | values derived from the suite, such as the task job timeout |
 | `hb/grade.py` | observation comparison, verdict, probe runner contract, `grade_rep` |
 | `hb/metrics.py` | usage and cost from gateway records |

@@ -19,10 +19,9 @@ what the harness sends:
 * An attempt is void (recorded as `upstream_failed`; the toolkit re-runs it)
   only for provider-side or setup failures: retries exhausted, setup errors
   (401/403/404), a connection lost after the request was fully sent, a broken
-  stream, usage that cannot be counted, a gateway fault after admission, or a
-  record that cannot be written. A void is a
-  re-roll, so nothing that depends only on the harness's own behaviour voids:
-  malformed requests are `bad_request`, and requests the gateway stops waiting
+  stream, usage that cannot be counted, or a gateway fault after admission.
+  A void is a re-roll, so nothing that depends only on the harness's own
+  behaviour voids: malformed requests are `bad_request`, and requests the gateway stops waiting
   for (a read timeout after sending, before or after the response headers, or
   shutdown) are `usage_unknown`.
 
@@ -30,7 +29,9 @@ One record per POST is appended to a JSONL log
 (schemas/gateway-record.schema.json). Bodies are stored only as hashes.
 Standard library only, so it runs in the toolkit image without extra
 dependencies. Exit status: 0 after a clean shutdown, 1 if a record could not
-be written (the attempt must then be treated as void), 2 for bad settings.
+be written, 2 for bad settings. The toolkit fails the job on any non-zero
+status instead of re-running the attempt: a full disk can be the harness's
+doing, so it must not become a re-roll.
 
 Usage:
     MODEL_API_KEY=... python -m hb.gateway --listen 0.0.0.0:8080 \\
@@ -455,7 +456,11 @@ class Gateway:
         return min(delay, cfg.max_retry_delay_s)
 
     def write_record(self, record: dict) -> None:
-        """Append a record. If that fails, the attempt cannot be trusted: void it and stop."""
+        """Append a record. If that fails, the log cannot be trusted: stop answering and exit 1.
+
+        The ledger is marked void so later requests are refused, but the toolkit
+        fails the job on the exit status rather than re-running the attempt.
+        """
         try:
             self.log.write(record)
         except (OSError, ValueError):  # ValueError: the log is already closed
