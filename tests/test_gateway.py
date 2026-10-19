@@ -547,16 +547,17 @@ def test_the_exit_status_is_set_before_the_void_is_recorded(stub, make_gateway, 
     # A toolkit that sees the record and stops the gateway must always find status 3.
     gw = make_gateway(upstream_retries=0)
     first_attempt_unreachable(gw)
-    seen, real_decide = [], gateway.Exchange._decide
+    seen, real_record = [], gateway.Exchange._record
 
-    def decide(self, outcome, *args, **kwargs):
+    def record(self, outcome, *args, **kwargs):
         if outcome == "upstream_failed":
             seen.append(self.gw.unreachable)
-        return real_decide(self, outcome, *args, **kwargs)
+        return real_record(self, outcome, *args, **kwargs)
 
-    monkeypatch.setattr(gateway.Exchange, "_decide", decide)
+    monkeypatch.setattr(gateway.Exchange, "_record", record)
     assert gw.request(body=CHAT)[0] == 502
     assert seen == [True]
+    assert gw.close() == gateway.EXIT_UNREACHABLE
 
 
 def test_shutdown_during_the_backoff_after_an_unreachable_attempt_is_not_a_void(stub, make_gateway):
@@ -569,6 +570,23 @@ def test_shutdown_during_the_backoff_after_an_unreachable_attempt_is_not_a_void(
     worker.join(timeout=5)
     [record] = gw.records(1)
     assert record["outcome"] == "usage_unknown" and len(stub.requests) == 0
+
+
+def test_shutdown_while_reading_the_answer_after_an_unreachable_attempt_is_not_a_failure(stub, make_gateway):
+    # Shutdown cuts the read of the retry's answer short. The relay then fails, but the
+    # request was already abandoned: nothing voids, so the job must not fail either.
+    gw = make_gateway(upstream_retries=1)
+    first_attempt_unreachable(gw)
+    stub.push(("stall_json", 3.0, 200, completion()))  # the headers and half the body, then silence
+    worker, _ = background_request(gw, body=CHAT)
+    assert wait_for(lambda: len(stub.requests) == 1)
+    time.sleep(0.3)  # the gateway is reading the body
+
+    assert gw.close(drain_s=0.1) == gateway.EXIT_OK
+    worker.join(timeout=5)
+    [record] = gw.records(1)
+    assert record["outcome"] == "usage_unknown" and record["upstream_attempts"] == 2
+    assert not gw.gateway.unreachable and not gw.gateway.ledger.void
 
 
 def test_an_attempt_that_never_reached_the_provider_is_harmless_when_a_retry_succeeds(stub, make_gateway):

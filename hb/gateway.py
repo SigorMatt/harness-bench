@@ -880,12 +880,15 @@ class Exchange:
         """Fix this request's record, unless shutdown abandoned it first.
 
         A void and the counting of usage already known happen in the same step,
-        so shutdown either keeps them or prevents them.
+        so shutdown either keeps them or prevents them. So does exit status 3 (see
+        _fail): a request shutdown abandoned first never voids, so it never sets it.
         """
         with self._lock:
             if self.abandoned:
                 return None
             if void:
+                if self.unreached is not None:
+                    self.gw.mark_unreachable(self.unreached)
                 self.gw.ledger.mark_void()
                 if usage is not None:
                     self._count_locked(usage)
@@ -929,11 +932,9 @@ class Exchange:
         connections need, such as a kernel table every container shares. A void
         would be a re-roll, so the exit status becomes 3 and the job fails instead.
         The record and the answer stay those of a void, so later requests are
-        answered locally. The status is set before the record exists, so a toolkit
-        that reacts to the record always finds it.
+        answered locally. _decide sets the status with the void, before the record
+        exists, so a toolkit that reacts to the record always finds it.
         """
-        if self.unreached is not None:
-            self.gw.mark_unreachable(self.unreached)
         record = self._decide("upstream_failed", self.status_sent or 502, usage, finish, tools, void=True)
         if record is None:
             return None
