@@ -14,11 +14,13 @@ what the harness sends:
   counted. If the client did not ask for usage, the usage-only chunk is
   removed from what the client receives.
 * Provider failures are retried only while no byte has reached the client and
-  only when the provider cannot still be working on the request.
+  only when the provider cannot be working on the request: before it was fully
+  sent, or after the provider answered 408, 429 or 5xx.
 * An attempt is void (recorded as `upstream_failed`; the toolkit re-runs it)
   only for provider-side or setup failures: retries exhausted, setup errors
-  (401/403/404), a broken stream, usage that cannot be counted, a gateway
-  fault after admission, or a record that cannot be written. A void is a
+  (401/403/404), a connection lost after the request was fully sent, a broken
+  stream, usage that cannot be counted, a gateway fault after admission, or a
+  record that cannot be written. A void is a
   re-roll, so nothing that depends only on the harness's own behaviour voids:
   malformed requests are `bad_request`, and requests the gateway stops waiting
   for (a read timeout after sending, before or after the response headers, or
@@ -722,10 +724,12 @@ class Exchange:
         """Send the request, retrying where that is safe.
 
         Returns (conn, resp, None), or (None, None, "timeout" | "failed").
-        Retried: connection and TLS failures, a connection closed without any
-        response, and 408/429/5xx answers. Not retried: a timeout after the
-        request was sent, because the provider may still be generating (and
-        billing) an answer the gateway would never count.
+        Retried: connection and TLS failures before the request was fully sent,
+        and 408/429/5xx answers. Not retried, once the request was fully sent:
+        a timeout ("timeout": usage_unknown), or a connection that fails or
+        closes before any response ("failed": a void). The provider may already
+        be generating, and billing, an answer the gateway would never count, so
+        a retry could bill twice while the record shows one call.
         """
         cfg = self.gw.config
         while not self.abandoned:
@@ -747,8 +751,8 @@ class Exchange:
                 resp = conn.getresponse()
             except (OSError, http.client.HTTPException) as exc:
                 conn.close()
-                if sent and isinstance(exc, TimeoutError):
-                    return None, None, "timeout"
+                if sent:  # the provider may hold the whole request: never send it again
+                    return None, None, "timeout" if isinstance(exc, TimeoutError) else "failed"
                 if self.attempts > cfg.upstream_retries:
                     return None, None, "failed"
                 self._abandoned_event.wait(self.gw.retry_delay(self.attempts, None))

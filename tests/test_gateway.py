@@ -438,7 +438,7 @@ def test_tokens_are_counted_when_the_client_leaves_mid_stream(stub, make_gateway
 
 def test_provider_failures_are_retried_before_any_byte_reaches_the_client(stub, make_gateway):
     gw = make_gateway(upstream_retries=3)
-    stub.push(("json", 503, {"error": "busy"}), ("drop",),
+    stub.push(("json", 503, {"error": "busy"}), ("json", 408, {"error": "timeout"}),
               ("json", 429, {"error": "slow down"}, {"retry-after-ms": "20"}), ("json", 200, completion()))
 
     assert gw.request(body=CHAT)[0] == 200
@@ -446,6 +446,42 @@ def test_provider_failures_are_retried_before_any_byte_reaches_the_client(stub, 
     assert len(stub.requests) == 4
     [record] = gw.records(1)
     assert record["outcome"] == "ok" and record["upstream_attempts"] == 4
+
+
+def test_a_connection_lost_after_the_full_request_is_a_void_without_a_retry(stub, make_gateway):
+    gw = make_gateway(upstream_retries=3)
+    stub.push(("drop",), ("json", 200, completion()))  # the provider read the whole request, then closed
+
+    status, headers, _ = gw.request(body=CHAT)
+    later = gw.request(body=CHAT)
+
+    assert status == 502 and headers["x-should-retry"] == "false"
+    assert len(stub.requests) == 1  # never sent twice: the provider may already be generating
+    assert later[0] == 502 and len(stub.requests) == 1
+    failed, local = gw.records(2)
+    assert failed["outcome"] == "upstream_failed" and failed["upstream_attempts"] == 1
+    assert local["outcome"] == "upstream_failed" and local["upstream_attempts"] == 0
+
+
+def test_connection_failures_before_sending_are_retried(tmp_path):
+    with socket.socket() as placeholder:  # a port with nothing listening: every connect is refused
+        placeholder.bind(("127.0.0.1", 0))
+        port = placeholder.getsockname()[1]
+    config = gateway.Config(upstream=gateway.Upstream.parse(f"http://127.0.0.1:{port}/v1/"), model=MODEL,
+                            api_key=KEY, max_total_tokens=1000, max_calls=10, upstream_retries=2,
+                            retry_base_delay_s=0.01)
+    server = gateway.build_server(config, tmp_path / "gateway.jsonl", "127.0.0.1:0")
+    threading.Thread(target=server.serve_forever, args=(POLL,), daemon=True).start()
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+        conn.request("POST", "/v1/chat/completions", body=json.dumps(CHAT), headers={"Content-Type": "application/json"})
+        assert conn.getresponse().status == 502
+        conn.close()
+    finally:
+        assert gateway.shutdown(server, 0) == 0
+    [record] = [json.loads(line) for line in (tmp_path / "gateway.jsonl").read_text().splitlines()]
+    validate("gateway-record", record)
+    assert record["outcome"] == "upstream_failed" and record["upstream_attempts"] == 3  # 1 + 2 retries
 
 
 def test_streaming_requests_are_retried_too(stub, make_gateway):
@@ -839,7 +875,7 @@ def test_shutdown_keeps_an_answer_already_decided(stub, make_gateway, monkeypatc
 
 def test_shutdown_cuts_a_retry_backoff_short_and_sends_nothing_more(stub, make_gateway):
     gw = make_gateway(retry_base_delay_s=10.0)
-    stub.push(("drop",), ("json", 200, completion()))
+    stub.push(("json", 503, {"error": "busy"}), ("json", 200, completion()))  # a 503 is retried after a backoff
     worker, _ = background_request(gw, body=CHAT)
     assert wait_for(lambda: len(stub.requests) == 1)
     time.sleep(0.2)  # the exchange is now waiting out its backoff
