@@ -574,6 +574,20 @@ protected-path restores, out-of-scope edits and infra re-runs.
   construction, by dropping every harness packet except TCP to the gateway's
   port before it is tracked, or by failing the job instead of voiding when a
   connection fails before the request is sent, is an open design decision.
+- **Early kills depend on reading the gateway log.** The kill on a void and the
+  kill 30 seconds after the first budget refusal (§6.1) come from copying
+  `gateway.jsonl` out of the gateway every 2 seconds while the harness runs.
+  Each copy reads the whole log, up to 256 MiB and for at most 30 seconds, and
+  a copy that fails is ignored, so a harness that makes the gateway write many
+  records slows these copies down. A void is still decided from the final log
+  after the gateway stops, so a missed copy only delays its kill. The grace
+  period runs from the gateway's answer, so a late copy does not lengthen it;
+  only if no copy succeeds from the first refusal on does the harness run to
+  its wall-clock limit (`wall_timeout`), and then without the model, since
+  every later request is refused for budget. A log over 256 MiB fails the job.
+  Reading only the part of the log written since the last copy would remove
+  the slowdown; it needs a way to read part of a file in the gateway's volume
+  and is left for later.
 - **Job failures a harness can cause.** A harness can make its own task job
   fail (§6.1), for example by filling the runner's disk. That loses the whole
   run, so it is never a way to re-roll a rep; at most it is a costly form of the
