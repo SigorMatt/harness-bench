@@ -201,7 +201,8 @@ class RunningGateway:
                         retry_base_delay_s=0.01)
         settings.update(overrides)
         self.log_path = tmp_path / "gateway.jsonl"
-        self.server = gateway.build_server(gateway.Config(**settings), self.log_path, "127.0.0.1:0")
+        self.state_path = tmp_path / "state.json"
+        self.server = gateway.build_server(gateway.Config(**settings), self.log_path, "127.0.0.1:0", self.state_path)
         self.gateway = self.server.gateway
         self.port = self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, args=(POLL,), daemon=True)
@@ -235,6 +236,11 @@ class RunningGateway:
 
     def lines(self):
         return self.log_path.read_text().splitlines() if self.log_path.exists() else []
+
+    def state(self):
+        state = json.loads(self.state_path.read_text())
+        validate("gateway-state", state)
+        return state
 
     def records(self, expected):
         wait_for(lambda: len(self.lines()) >= expected)
@@ -1109,6 +1115,79 @@ def test_a_failed_log_write_voids_the_attempt_and_stops_the_gateway(stub, make_g
     assert wait_for(lambda: not gw.thread.is_alive())
     assert gw.gateway.fatal and gw.gateway.ledger.void
     assert gw.close() == 1
+
+
+# ------------------------------------------------------------ state file
+
+
+def test_the_state_file_exists_from_startup(make_gateway):
+    gw = make_gateway()
+    assert gw.state() == {"schema": "hb/gateway-state/1", "void": False, "first_refusal_ms": None}
+
+
+def test_the_state_file_shows_a_void_before_its_record(stub, make_gateway, monkeypatch):
+    gw = make_gateway()
+    stub.push(("json", 401, {"error": "bad key"}))
+    seen, real_write = [], gateway.Gateway.write_record
+
+    def write_record(self, record):
+        seen.append(json.loads(gw.state_path.read_text())["void"])
+        real_write(self, record)
+
+    monkeypatch.setattr(gateway.Gateway, "write_record", write_record)
+    assert gw.request(body=CHAT)[0] == 502
+    gw.records(1)
+    assert seen == [True]
+    assert gw.state()["void"] is True
+
+
+def test_the_state_file_keeps_the_first_budget_refusal(stub, make_gateway):
+    gw = make_gateway(max_calls=1)
+    stub.push(("json", 200, completion()))
+    assert gw.request(body=CHAT)[0] == 200
+    assert gw.state()["first_refusal_ms"] is None
+
+    before = time.time_ns() // 1_000_000
+    assert gw.request(body=CHAT)[0] == 429
+    after = time.time_ns() // 1_000_000
+    first = gw.state()["first_refusal_ms"]
+    assert before <= first <= after
+    time.sleep(0.01)
+    assert gw.request(body=CHAT)[0] == 429
+    assert gw.state() == {"schema": "hb/gateway-state/1", "void": False, "first_refusal_ms": first}
+    assert not list(gw.state_path.parent.glob("*.tmp"))  # replaced by rename, nothing left over
+
+
+@pytest.mark.parametrize("trigger", ["refusal", "void"])
+def test_a_state_file_that_cannot_be_written_stops_the_gateway(stub, make_gateway, monkeypatch, capsys, trigger):
+    # A refusal missing from the file would spare the harness its grace-period kill, and a
+    # full disk can be its doing, so the job must fail: exit status 1, as for a record.
+    gw = make_gateway(max_calls=1)
+    if trigger == "refusal":
+        stub.push(("json", 200, completion()))
+        assert gw.request(body=CHAT)[0] == 200
+    else:
+        stub.push(("json", 401, {"error": "bad key"}))
+    saves = []
+
+    def fail(self):
+        saves.append(1)
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(gateway.StateFile, "_save", fail)
+    assert gw.request(body=CHAT)[0] == (429 if trigger == "refusal" else 502)  # answered and recorded
+
+    assert wait_for(lambda: not gw.thread.is_alive())  # then the gateway stops serving
+    assert saves == [1] and gw.gateway.fatal
+    assert len(gw.records(2 if trigger == "refusal" else 1)) >= 1
+    assert gw.close() == gateway.EXIT_LOG_FAILED
+    assert "the state file could not be written" in capsys.readouterr().err
+
+
+def test_a_state_file_that_cannot_be_created_stops_the_gateway_at_startup(stub, tmp_path, monkeypatch):
+    monkeypatch.setenv("MODEL_API_KEY", KEY)
+    argv = cli_args(stub, tmp_path)[3:] + ["--state", str(tmp_path / "missing-dir" / "state.json")]
+    assert gateway.main(argv) == gateway.EXIT_BAD_SETTINGS
 
 
 # --------------------------------------------------------- configuration

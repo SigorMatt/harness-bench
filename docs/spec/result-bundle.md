@@ -328,6 +328,21 @@ mid-stream, the gateway keeps reading to the end, because those tokens are
 billed anyway. A record's `totals` are taken before its answer is complete, so
 they never include the client's next request.
 
+**State file.** Next to the log, the gateway keeps `/log/state.json`
+([`schemas/gateway-state.schema.json`](../../schemas/gateway-state.schema.json)):
+whether the attempt is void, and when the gateway first refused a request for
+budget. It is written at startup and replaced atomically (a temporary file,
+then a rename) when either fact first becomes true; the void flag is set
+before the record of the request that voided the attempt is written. The
+toolkit reads it while the harness runs to time its early kills (§6.1). It is
+small and bounded, so reading it costs the same however many requests the
+harness makes, and the toolkit never reads the growing log until the gateway
+has stopped. It is not part of any bundle, and whether an attempt is void is
+always decided from the records. A write that fails after startup stops the
+gateway with exit status 1, as a record it cannot write does, and the job
+fails: a full disk can be the harness's doing, and a refusal missing from the
+file would spare the harness its grace-period kill.
+
 **Derived efficiency metrics** (`hb/metrics.py`): tokens, cached share, model
 calls (requests that reached the provider), tool-call parse failures, model
 time (time spent on those requests, including retry backoff and relaying) and
@@ -359,7 +374,8 @@ docker run --detach --name <gw> --network bridge --read-only --cap-drop ALL \
   --memory 2048m --memory-swap 2048m --pids-limit 1024 --ulimit nofile=8192:8192 \
   --log-driver json-file --log-opt max-size=8m --log-opt max-file=2 \
   --mount type=volume,src=<gwlog>,dst=/log --env MODEL_API_KEY \
-  <toolkit@digest> gateway --upstream <base_url> --model <model_id> --drain-s 120 ...
+  <toolkit@digest> gateway --upstream <base_url> --model <model_id> --drain-s 120 \
+  --log /log/gateway.jsonl --state /log/state.json ...
 docker network connect --alias gateway <net> <gw>
 docker create --name <harness> --network <net> \
   --read-only --tmpfs /tmp:rw,nosuid,nodev,size=1024m \
@@ -386,8 +402,8 @@ docker start <harness>
   it after the harness has stopped. A new volume takes its owner from the
   toolkit image's directory at its mount point, which is how `/workspace`
   belongs to the harness user and `/log` to the gateway user.
-- The gateway log volume is mounted only into the gateway; the toolkit copies
-  it out after the rep (I5).
+- The gateway log volume, with the log and the state file, is mounted only into
+  the gateway; the toolkit copies them out (I5).
 - A harness can open many connections to the gateway. Each holds one thread
   and at most three file descriptors, and the descriptor limit is pinned at
   more than three times the thread limit. A flood therefore always meets the
@@ -420,7 +436,11 @@ of one task in turn:
 1. Set up the attempt as above and wait until the gateway listens.
 2. Start the harness and watch it. It is killed at the wall-clock limit, 30
    seconds after the gateway first refuses one of its requests for budget, or
-   as soon as an `upstream_failed` record appears in the gateway log (§5.1).
+   as soon as the attempt is void (§5.1). The last two come from polling the
+   gateway's state file (§5.2) every 2 seconds. Each read is bounded by the
+   time left before the next deadline, so a slow read cannot delay a kill; a
+   read that fails only delays an early kill, the grace period runs from the
+   time in the file, and failures in a row are reported.
 3. Stop the gateway with `docker stop --time 150`, longer than its 120-second
    drain. Copy out `gateway.jsonl`. If any record is `upstream_failed`, the
    attempt is void: it is discarded and the rep runs again in fresh containers.
@@ -435,8 +455,8 @@ of one task in turn:
 
 **What fails the job.** Anything the toolkit cannot trust or finish: a Docker
 command that fails or times out, a gateway that does not start, stops while the
-harness runs or exits with a non-zero status (a record that could not be
-written, a provider that could not be reached, a kill), a malformed gateway
+harness runs or exits with a non-zero status (a record or the state file that
+could not be written, a provider that could not be reached, a kill), a malformed gateway
 log, a void on every allowed attempt, or a probe sandbox that cannot start. A
 harness can cause some of these, for example by filling the disk, by filling a
 kernel table the gateway's connections need, or by leaving more than
@@ -584,20 +604,6 @@ protected-path restores, out-of-scope edits and infra re-runs.
   shows the count next to the token totals. Converting non-streaming requests to
   streaming upstream would remove the timeout case, but it would change what
   reaches the provider and is left for later.
-- **Early kills depend on reading the gateway log.** The kill on a void and the
-  kill 30 seconds after the first budget refusal (§6.1) come from copying
-  `gateway.jsonl` out of the gateway every 2 seconds while the harness runs.
-  Each copy reads the whole log, up to 256 MiB and for at most 30 seconds, and
-  a copy that fails is ignored, so a harness that makes the gateway write many
-  records slows these copies down. A void is still decided from the final log
-  after the gateway stops, so a missed copy only delays its kill. The grace
-  period runs from the gateway's answer, so a late copy does not lengthen it;
-  only if no copy succeeds from the first refusal on does the harness run to
-  its wall-clock limit (`wall_timeout`), and then without the model, since
-  every later request is refused for budget. A log over 256 MiB fails the job.
-  Reading only the part of the log written since the last copy would remove
-  the slowdown; it needs a way to read part of a file in the gateway's volume
-  and is left for later.
 - **Job failures a harness can cause.** A harness can make its own task job
   fail (§6.1), for example by filling the runner's disk, or by filling the
   connection-tracking table every container on the runner shares so that the

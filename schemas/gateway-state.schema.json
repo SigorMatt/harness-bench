@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:gateway-state:1",
+  "title": "Gateway state (/log/state.json in the gateway's volume)",
+  "description": "Written by the gateway at startup and replaced atomically when a fact first becomes true. The toolkit reads it while the harness runs to time its early kills; it is not part of any bundle, and whether an attempt is void is decided from gateway.jsonl after the gateway stops.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "void", "first_refusal_ms"],
+  "properties": {
+    "schema": {
+      "const": "hb/gateway-state/1"
+    },
+    "void": {
+      "description": "True once the attempt is void (an upstream_failed record was decided). The toolkit then ends the attempt.",
+      "type": "boolean"
+    },
+    "first_refusal_ms": {
+      "description": "When the gateway first refused a request for budget (epoch ms), or null. The toolkit ends the rep 30 seconds later.",
+      "oneOf": [
+        {"$ref": "urn:hb:schema:common:1#/$defs/epoch_ms"},
+        {"type": "null"}
+      ]
+    }
+  }
+}
