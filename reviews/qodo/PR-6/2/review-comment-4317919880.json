@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4317919880",
+  "pull_request_review_id": 5576623985,
+  "id": 4317919880,
+  "node_id": "PRRC_kwDOVO0AUs8AAAABAV46iA",
+  "diff_hunk": "@@ -22,3 +31,49 @@ def task_job_timeout_minutes(suite: dict, max_probe_timeout_seconds: int) -> int\n     if minutes > MAX_JOB_MINUTES:\n         raise ValueError(f\"suite needs up to {minutes} minutes per task job; the limit is {MAX_JOB_MINUTES}\")\n     return minutes\n+\n+\n+MAX_TASKS = 256  # one task job per task, in one GitHub Actions matrix\n+TASK_ID = re.compile(r\"[a-z0-9][a-z0-9-]{0,62}\")  # the slug of schemas/common.schema.json\n+\n+\n+class PlanError(ValueError):\n+    \"\"\"The suite cannot be run as it is.\"\"\"\n+\n+\n+def task_ids(suite: dict) -> list[str]:\n+    \"\"\"The suite's task ids: slugs, sorted and unique, between 1 and MAX_TASKS of them.\"\"\"\n+    ids = [task[\"id\"] for task in suite[\"tasks\"]]\n+    if not 1 <= len(ids) <= MAX_TASKS:\n+        raise PlanError(f\"a suite has between 1 and {MAX_TASKS} tasks, this one has {len(ids)}\")\n+    if any(not isinstance(i, str) or not TASK_ID.fullmatch(i) for i in ids):\n+        raise PlanError(\"task ids must be slugs\")\n+    if ids != sorted(set(ids)):\n+        raise PlanError(\"task ids must be sorted and unique\")\n+    return ids\n+\n+\n+def plan_run(suite_dir: Path) -> dict:\n+    \"\"\"{\"tasks\": [...], \"timeout_minutes\": n} for a run of the suite in suite_dir.\n+\n+    Every listed task must have tasks/<id>/task.json with the same id. Raises\n+    PlanError, or ValueError when the suite cannot fit in a task job.\n+    \"\"\"\n+    suite_dir = Path(suite_dir)\n+    suite = json.loads((suite_dir / \"suite.json\").read_text(encoding=\"utf-8\"))\n+    ids = task_ids(suite)\n+    probe_timeouts = []\n+    for task_id in ids:\n+        path = suite_dir / \"tasks\" / task_id / \"task.json\"\n+        try:\n+            task = json.loads(path.read_text(encoding=\"utf-8\"))\n+        except (OSError, ValueError) as exc:\n+            raise PlanError(f\"task {task_id}: cannot read task.json ({exc})\") from None\n+        if not isinstance(task, dict) or task.get(\"id\") != task_id:\n+            raise PlanError(f\"task {task_id}: task.json does not name this task\")\n+        probe = task.get(\"probe\") if isinstance(task, dict) else None\n+        timeout = probe.get(\"timeout_seconds\") if isinstance(probe, dict) else None\n+        if type(timeout) is not int or timeout < 1:\n+            raise PlanError(f\"task {task_id}: the probe has no valid timeout\")\n+        probe_timeouts.append(timeout)\n+    return {\"tasks\": ids, \"timeout_minutes\": task_job_timeout_minutes(suite, max(probe_timeouts))}",
+  "path": "hb/plan.py",
+  "commit_id": "92f8168e2fdaedd423d942d74032f23faacd0a1a",
+  "original_commit_id": "149896d920d2ba158acfb6c70d093a3eb286d5b6",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n1\\. Task jobs can time out before finishing <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>plan_run()</i></b> uses <b><i>task_job_timeout_minutes()</i></b>, which budgets only 60 seconds per attempt for work\nincluding the workspace snapshot, although <b><i>_snapshot_patch()</i></b> alone can wait up to 600 seconds.\nWhen snapshots take longer than that allowance, the workflow can terminate a valid task job before\nit finishes, even though planning approved the suite.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe newly wired planner can approve a suite with a task-job timeout shorter than the time its execution path permits. Its 60-second per-attempt overhead does not cover a workspace snapshot that can take 600 seconds.\n## Fix Focus Areas\n- hb/plan.py[17-32]\n- hb/plan.py[74-79]\n- hb/orchestrator.py[85-92]\n## Recommended Fix\nInclude the permitted snapshot duration and other bounded per-attempt operations in the timeout calculation. Recheck the hosted-job limit using that bound, and add a test for a suite near the limit.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/9999c6d6-1ae4-483c-9bd2-a5f8b45a0326?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/9999c6d6-1ae4-483c-9bd2-a5f8b45a0326)",
+  "created_at": "2026-10-19T19:26:40Z",
+  "updated_at": "2026-10-19T19:26:40Z",
+  "html_url": "https://github.com/SigorMatt/harness-bench/pull/6#discussion_r4317919880",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/6",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4317919880"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/harness-bench/pull/6#discussion_r4317919880"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/6"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4317919880/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": null,
+  "original_start_line": null,
+  "start_side": null,
+  "line": 81,
+  "original_line": 79,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 67,
+  "position": 78,
+  "subject_type": "line"
+}
