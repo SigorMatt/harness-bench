@@ -137,11 +137,15 @@ def _regular_only(member: tarfile.TarInfo, dest: str) -> tarfile.TarInfo:
     return member
 
 
-def extract_bundle(tar_path: Path, dest: Path) -> None:
-    """Extract an archive into an empty directory, accepting regular-file members only."""
+def extract_bundle(source, dest: Path) -> None:
+    """Extract an archive into an empty directory, accepting regular-file members only.
+
+    source is a path, or a binary file object positioned at the archive's start.
+    """
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     if any(dest.iterdir()):
         raise VerificationError("extraction directory must be empty")
-    with tarfile.open(tar_path, "r:") as tar:
+    opened = tarfile.open(fileobj=source, mode="r:") if hasattr(source, "read") else tarfile.open(source, "r:")
+    with opened as tar:
         tar.extractall(dest, filter=_regular_only)

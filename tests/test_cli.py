@@ -38,6 +38,7 @@ def test_job_from_env():
     ("HARNESS_ID", ""), ("HARNESS_ID", "not-registered"), ("HARNESS_ID", "Bad Id"),
     ("TASK_ID", "no-such-task"), ("TASK_ID", "../etc"),
     ("HB_REPOSITORY", "no-slash"), ("HB_RUN_ID", "0"), ("HB_RUN_ID", "12x"), ("HB_RUN_ATTEMPT", ""),
+    ("HB_RUN_ATTEMPT", "2"),  # well formed, but a re-run can never be accepted: refused before any tokens
     ("HB_TOOLKIT_IMAGE", "ghcr.io/sigormatt/hb-toolkit:latest"), ("MODEL_API_KEY", ""),
 ])
 def test_bad_inputs_are_refused(name, value):
@@ -47,7 +48,7 @@ def test_bad_inputs_are_refused(name, value):
 
 def test_unknown_command_and_bad_inputs_exit_2(tmp_path, capsys):
     assert cli.main([]) == 2
-    assert cli.main(["seal"]) == 2
+    assert cli.main(["frobnicate"]) == 2
     env_free = subprocess.run(
         [sys.executable, "-m", "hb", "run-task", "--suite", str(SUITE_DIR), "--out", str(tmp_path),
          "--registry", str(REGISTRY)],

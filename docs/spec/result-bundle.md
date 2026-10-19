@@ -158,6 +158,7 @@ writes them.
 Written and attested by the seal job: the run identity, the release images, the
 full cohort and entry keys, and for every suite task (sorted) the digest and
 size of its bundle archive ([`schemas/run-manifest.schema.json`](../../schemas/run-manifest.schema.json)).
+§6.2 lists what is checked before a run is sealed.
 
 ## 5. Records
 
@@ -466,6 +467,48 @@ run, instead of voiding the attempt, which would re-roll one rep. The gateway's
 memory and process limits keep a harness that floods it from taking the runner
 down.
 
+### 6.2 Planning and sealing
+
+Two short jobs frame the task jobs. Both run the toolkit image with no network
+and the extracted suite mounted read-only.
+
+**Plan** (`python3 -m hb plan`, `hb.plan.plan_run`) runs before any task job,
+so a run that could not complete fails before any tokens are spent. It refuses
+a harness id that is not in the registry, a task list that is empty, unsorted,
+duplicated or longer than 256 (one GitHub Actions matrix), a listed task whose
+`task.json` is missing or names another task, and a suite whose task jobs
+cannot fit in a hosted job (§5.1). It writes the task ids as one JSON line for
+the matrix, and the task job timeout.
+
+**Seal** (`python3 -m hb seal`, `hb.seal.seal_run`) runs only after every task
+job succeeded. The task bundles are downloaded each into a directory named
+after its artifact, so for every suite task in order seal reads exactly
+`task-bundle-<task>/task-bundle-<task>.tar`, the path acceptance verifies
+(`hb.accept.bundle_artifact_file`); other files are ignored, and a file that
+another artifact carries under the same name cannot take its place. It
+recomputes the cohort and entry from the suite and the registry. Each bundle
+must be a regular file; it is hashed and extracted from the same open file
+(regular-file members only, §4.1), and must verify against its own manifest
+and name this run, this task and the suite's rep count. Every rep's lifecycle
+must name its task, its rep and the registry's harness image. The attempts of
+all reps must stay within the suite's infra rules (`hb.accept.check_attempts`),
+and the run must be a first attempt (I10). Only then is the run manifest
+written, with each bundle's digest and size, and attested.
+
+Sealing adds no trust: other jobs in the caller's workflow can upload
+artifacts too, so acceptance verifies every bundle's own attestation and
+repeats the run-level checks (§8). A run that fails any check made here is
+never sealed. Schema validation and re-grading happen only at acceptance, and
+the lifecycle checks are seal's own consistency checks; acceptance relies on
+the attestation of the pinned toolkit that wrote those records.
+`scripts/make_examples.py` builds the example run manifest with the same
+function.
+
+A run that is not a first attempt can never be accepted, so plan, run-task
+and seal all refuse one before doing anything: after GitHub's "re-run failed
+jobs" or "re-run all jobs", no tokens are spent on a run that could not
+count. Start a new run instead.
+
 ## 7. Grading
 
 The same function, `hb.grade.grade_rep`, runs inside the run (advisory) and at
@@ -634,8 +677,9 @@ cohort.
 | `hb/orchestrator.py` | run-task: rep attempts, wall clock and budget grace, voids and re-runs, probe sandbox, task bundle |
 | `hb/transfer.py` | tar streams into and out of containers: packing toolkit trees, the workspace snapshot |
 | `hb/dockercli.py` | Docker CLI calls as argument lists with timeouts, and the clock |
-| `hb/cli.py` | `python3 -m hb gateway` and `run-task` in the toolkit image; inputs from the environment |
-| `hb/plan.py` | values derived from the suite, such as the task job timeout |
+| `hb/cli.py` | `python3 -m hb plan`, `run-task`, `seal` and `gateway` in the toolkit image; inputs from the environment |
+| `hb/plan.py` | values derived from the suite: the task matrix and the task job timeout (`plan_run`) |
+| `hb/seal.py` | sealing a run: one verified bundle per task, run identity, re-run limits, the run manifest |
 | `hb/grade.py` | observation comparison, verdict, probe runner contract, `grade_rep` |
 | `hb/metrics.py` | usage and cost from gateway records |
 | `hb/accept.py` | expected files, attestation commands, run acceptance, attempt rules, dedup key |

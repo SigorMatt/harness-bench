@@ -19,12 +19,19 @@ def run_key(run: dict) -> tuple[str, int]:
     return run["repository"].lower(), run["run_id"]
 
 
+def bundle_artifact_file(task_id: str) -> str:
+    """Where a task's bundle lands when a run's artifacts are downloaded, each into a
+    directory named after its artifact (`gh run download -D <dir>`, or the download
+    action without merge-multiple). The seal job and acceptance read the same path."""
+    return f"task-bundle-{task_id}/task-bundle-{task_id}.tar"
+
+
 def expected_artifact_files(release: dict) -> list[str]:
     """Files a sealed run must provide, as laid out by `gh run download -D <dir>`.
 
     Derived from the release's task list, so a submission cannot add or drop names.
     """
-    return [RUN_MANIFEST_FILE] + [f"task-bundle-{t}/task-bundle-{t}.tar" for t in sorted(release["task_ids"])]
+    return [RUN_MANIFEST_FILE] + [bundle_artifact_file(t) for t in sorted(release["task_ids"])]
 
 
 def attestation_verify_args(artifact: str, *, source_repo: str, release: dict) -> list[str]:

@@ -1,4 +1,5 @@
-# Reusable benchmark workflow (skeleton).
+# Reusable benchmark workflow. Every step it runs exists; the image pins below are
+# placeholders until the first release builds and publishes the images.
 #
 # Submitters call it from their own public repository, pinned to a release commit:
 #   uses: SigorMatt/harness-bench/.github/workflows/bench.yml@<release-commit-sha>
@@ -55,16 +56,20 @@ jobs:
         id: plan
         env:
           HARNESS_ID: ${{ inputs.harness_id }}  # passed as data, never interpolated into the script
+          HB_RUN_ATTEMPT: ${{ github.run_attempt }}  # only a first attempt can be accepted (spec I10)
         run: |
           mkdir -p "$RUNNER_TEMP/plan"
           docker run --rm --network none \
             --mount "type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/plan,dst=/out" \
-            --env HARNESS_ID \
+            --env HARNESS_ID --env HB_RUN_ATTEMPT \
             "$HB_TOOLKIT_IMAGE" plan --suite /suite --out /out
-          # tasks.json is one line: a JSON array of task ids (at most 256, the matrix limit).
-          # timeout_minutes is hb.plan.task_job_timeout_minutes(suite): every rep using
-          # every allowed attempt. Planning fails if that cannot fit in a hosted job.
+          # hb.plan.plan_run: tasks.json is one line, a JSON array of the suite's task ids
+          # (sorted slugs, at most 256, the matrix limit). timeout_minutes is
+          # hb.plan.task_job_timeout_minutes: every rep using every allowed attempt.
+          # Planning fails, before any tokens are spent, if the harness id is not in the
+          # registry, a listed task is missing, the task jobs cannot fit in a hosted job,
+          # or this is a re-run attempt (run-task and seal refuse one too).
           echo "tasks=$(cat "$RUNNER_TEMP/plan/tasks.json")" >> "$GITHUB_OUTPUT"
           echo "timeout_minutes=$(cat "$RUNNER_TEMP/plan/timeout_minutes")" >> "$GITHUB_OUTPUT"
 
@@ -151,12 +156,14 @@ jobs:
       # Other jobs in the caller's workflow run can upload artifacts too, so what is
       # downloaded here is not trusted on its own: every bundle carries its own
       # attestation from the job that built it, and acceptance verifies each one.
+      # Each artifact goes into its own directory (no merge-multiple), so seal reads
+      # task-bundle-<task>/task-bundle-<task>.tar, the same path acceptance verifies,
+      # and a file another artifact carries under the same name cannot take its place.
       - name: Download task bundles
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: task-bundle-*
           path: ${{ runner.temp }}/bundles
-          merge-multiple: true
 
       - name: Seal the run manifest
         env:
@@ -166,14 +173,18 @@ jobs:
           HB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           mkdir -p "$RUNNER_TEMP/seal"
-          # Recomputes cohort and entry from the suite and registry, checks that a
-          # bundle exists for every suite task and that infra re-runs stay under the
-          # suite's cap, then writes run-manifest.json with each bundle's digest.
+          # hb.seal.seal_run: recomputes cohort and entry from the suite and registry,
+          # takes task-bundle-<task>.tar for every suite task, verifies each against its
+          # manifest, this run, its task, the rep count and the harness image, checks
+          # infra re-runs against the suite's limits, then writes run-manifest.json with
+          # each bundle's digest and size. A run that could not be accepted (a missing
+          # or inconsistent bundle, too many re-runs, a re-run attempt) is not sealed.
           docker run --rm --network none \
             --mount "type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/bundles,dst=/bundles,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/seal,dst=/out" \
             --env HARNESS_ID --env HB_REPOSITORY --env HB_RUN_ID --env HB_RUN_ATTEMPT \
+            --env HB_TOOLKIT_IMAGE --env HB_SUITE_IMAGE \
             "$HB_TOOLKIT_IMAGE" seal --suite /suite --bundles /bundles --out /out
 
       - name: Attest the run manifest
