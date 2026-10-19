@@ -474,7 +474,8 @@ Two short jobs frame the task jobs. Both run the toolkit image with no network
 and the extracted suite mounted read-only.
 
 **Plan** (`python3 -m hb plan`, `hb.plan.plan_run`) runs before any task job,
-so a run that could not complete fails before any tokens are spent. It refuses
+so a run that it can tell could not complete fails before any tokens are
+spent; the task job timeout it writes is an estimate (§10). It refuses
 a harness id that is not in the registry, a task list that is empty, unsorted,
 duplicated or longer than 256 (one GitHub Actions matrix), a listed task whose
 `task.json` is missing or names another task, and a suite whose task jobs
@@ -661,22 +662,24 @@ protected-path restores, out-of-scope edits and infra re-runs.
   wall-clock limit, the budget grace, the gateway's 120-second drain, the
   longest probe and 60 seconds for everything else, plus 600 seconds per job
   for setup. The toolkit's own limits allow an attempt more: 30 seconds for
-  the gateway to listen, 30 for a killed harness to stop, `docker stop --time
-  150` for the gateway and 600 seconds for the workspace snapshot, while the
-  diff and the patch applied for grading are not timed, on a workspace of up
-  to 1 GiB or 200,000 entries. Usually what a job does not use covers this: the
-  grace never extends the wall clock, the probe runs once per rep, and an
-  attempt that is never run leaves its whole allowance unused. For the example
-  suite (3 reps of 1200 seconds, 2 re-runs per rep, 226 minutes) a job taking
-  every limit to its maximum runs out only after 5 or 6 void attempts that each
-  end near their wall-clock limit, more re-runs than an accepted run of a
-  one-task suite may have (I10). A suite with fewer reps or re-runs has less to spare,
-  and with one rep and none a snapshot that takes its full 600 seconds can end
-  the job by itself. A job ended by its timeout writes no bundle, so the run is
-  never sealed: it costs the run, never its integrity, and when a harness
-  causes it with a large workspace it is one of the job failures above.
-  Budgeting the snapshot and the probe once per rep and each toolkit limit per
-  attempt, and timing the diff and the patch apply, would make it a bound; that
+  the gateway to listen, 30 for a killed harness to stop, a 150-second stop
+  grace for the gateway (210 for the `docker stop` call) and 600 seconds for
+  the workspace snapshot, and any other Docker call may take 120, while the
+  tree copies, the diff and the patch applied for grading are not timed, on a
+  workspace of up to 1 GiB or 200,000 entries. Usually what a job does not use
+  covers this: the grace never extends the wall clock, the probe runs once per
+  rep, and an attempt that is never run leaves its whole allowance unused. For
+  the example suite (3 reps of 1200 seconds, 2 re-runs per rep, 226 minutes) a
+  job taking the listen, stop and snapshot limits to their maximum runs out
+  only after 5 or 6 void attempts that each end near their wall-clock limit,
+  more re-runs than an accepted run of a one-task suite can have (I10). A suite
+  with fewer reps or re-runs has less to spare, and with one rep and none a
+  snapshot that takes its full 600 seconds can end the job by itself. A job
+  ended by its timeout writes no bundle, so the run is never sealed: it costs
+  the run, never its integrity, and when a harness causes it with a large
+  workspace it is one of the job failures above. Budgeting the snapshot and
+  the probe once per rep and each toolkit limit per attempt, and timing the
+  copies, the diff and the patch apply, would bring it close to a bound; that
   is left for later.
 
 ## 11. Versioning

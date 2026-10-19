@@ -1,8 +1,8 @@
 """Values the workflow derives from the suite instead of hard-coding.
 
 plan_run() is what the plan job computes before any task job starts: the task
-matrix and the task job timeout. It refuses a suite the run could not complete,
-so such a suite fails before any tokens are spent.
+matrix and the task job timeout. It refuses a suite that it can tell the run
+could not complete, so such a suite fails before any tokens are spent.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ JOB_SETUP_SECONDS = 600           # image pulls and suite extraction
 
 
 def task_job_timeout_minutes(suite: dict, max_probe_timeout_seconds: int) -> int:
-    """Worst-case duration of one task job: every rep using every allowed attempt.
+    """Estimated duration of one task job with every rep using every allowed attempt.
 
     An estimate, not a bound: the toolkit's own limits (the snapshot timeout, the
     gateway's stop grace) allow an attempt more than PER_ATTEMPT_OVERHEAD_SECONDS,
