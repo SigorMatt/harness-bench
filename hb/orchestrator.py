@@ -20,11 +20,12 @@ For each rep attempt (container arguments come from hb/profile.py):
    suite's `max_reruns_per_rep` times; after that the job fails.
 7. Copy out the harness's output and its workspace, and diff the workspace
    against pristine (hb/transfer.py, hb/patch.py).
-8. Remove the attempt's containers, network and volumes, whatever happened.
+8. Remove the attempt's containers, network and volumes, and its local scratch
+   copies, whatever happened.
 
 Each rep is then graded (advisory; the aggregator re-grades) with its probe in
-the sandbox container, and the bundle is written: five files per rep, the
-manifest, and a deterministic archive.
+the sandbox container, its grading copies are removed, and the bundle is
+written: five files per rep, the manifest, and a deterministic archive.
 
 Everything that fails here raises, and the job fails, so the run cannot be
 sealed. Nothing is retried except a void attempt.
@@ -33,6 +34,7 @@ sealed. Nothing is retried except a void attempt.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -292,6 +294,7 @@ def run_attempt(job: TaskJob, cohort: dict, rep: int, attempt: int, *, docker: D
     finally:
         for error in docker.remove(**resources):
             _stderr(f"warning: {error}")
+        shutil.rmtree(scratch, ignore_errors=True)  # the Attempt holds what is kept
 
 
 def _run_attempt(job: TaskJob, cohort: dict, names: dict, *, docker: Docker, clock: Clock,
@@ -446,9 +449,15 @@ def run_task(job: TaskJob, *, docker: Docker, clock: Clock, out_dir: Path, work_
         (rep_dir / "gateway.jsonl").write_bytes(result.gateway_log)
         (rep_dir / "workspace.patch").write_bytes(result.patch)
         (rep_dir / "harness.log").write_bytes(result.harness_log)
-        grade = grade_rep(suite=suite, task_dir=task_dir, patch=result.patch, rep=rep,
-                          grader_image=job.toolkit_image, workdir=work_dir / f"grade-r{rep}",
-                          run_probe=probe_runner(rep, work_dir / f"probe-r{rep}"))
+        grade_dir, probe_dir = work_dir / f"grade-r{rep}", work_dir / f"probe-r{rep}"
+        try:
+            grade = grade_rep(suite=suite, task_dir=task_dir, patch=result.patch, rep=rep,
+                              grader_image=job.toolkit_image, workdir=grade_dir,
+                              run_probe=probe_runner(rep, probe_dir))
+        finally:
+            # Copies of the rep's tree: kept for every rep, they would add up on the runner's disk.
+            shutil.rmtree(grade_dir, ignore_errors=True)
+            shutil.rmtree(probe_dir, ignore_errors=True)
         _dump(rep_dir / "grade.json", grade)
         _stderr(f"rep {rep}: resolved={grade['resolved']} (advisory)")
 

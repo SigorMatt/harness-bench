@@ -366,6 +366,13 @@ def test_void_seen_only_after_the_gateway_drained(tmp_path):
     assert rep_file(out, 1, "lifecycle.json")["attempts"] == 2
 
 
+def test_scratch_copies_are_removed_after_each_attempt_and_grade(tmp_path):
+    # They scale with the workspace; kept for every rep, they would add up on the runner's disk.
+    scripts = {(1, 1): Script(records=[(1.0, "upstream_failed")]), (1, 2): Script(), (2, 1): Script()}
+    run(tmp_path, scripts, reps=2)
+    assert sorted(p.name for p in (tmp_path / "work").iterdir()) == ["bundle", "pristine"]
+
+
 def test_reruns_are_capped(tmp_path):
     void = [(1.0, "upstream_failed")]
     scripts = {(1, a): Script(records=void) for a in (1, 2)}
@@ -412,6 +419,7 @@ def test_workspace_over_the_limit_fails_the_job_and_cleans_up(tmp_path, monkeypa
         run_task(job, docker=docker, clock=clock, out_dir=tmp_path / "out", work_dir=tmp_path / "work",
                  timing=TIMING, probe_runner=lambda rep, scratch: run_probe_unsandboxed_for_tests)
     assert len(docker.removed) == 2  # the attempt's resources, before and after
+    assert not (tmp_path / "work" / "r1a1").exists()
     assert not (tmp_path / "out").exists()
 
 

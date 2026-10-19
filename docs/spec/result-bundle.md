@@ -409,9 +409,11 @@ of one task in turn:
 4. Copy out the harness's output and its workspace. The snapshot keeps
    directories, regular files and hard links to them, and skips everything else
    (I6). It is diffed against pristine with `hb.patch.workspace_diff`.
-5. Remove the attempt's containers, network and volumes, whatever happened.
-6. Grade the rep (§7), write its five files, and after the last rep write the
-   manifest and the archive `task-bundle-<task>.tar`.
+5. Remove the attempt's containers, network and volumes, and the toolkit's
+   local copies of its files, whatever happened.
+6. Grade the rep (§7), remove the grading copies, write its five files, and
+   after the last rep write the manifest and the archive
+   `task-bundle-<task>.tar`.
 
 **What fails the job.** Anything the toolkit cannot trust or finish: a Docker
 command that fails or times out, a gateway that does not start, stops while the
