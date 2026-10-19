@@ -178,8 +178,9 @@ the harness stopped. There is no infra-error value: an attempt the gateway
 voided (§5.2) is re-run with a fresh network, gateway and workspace, up to
 `infra.max_reruns_per_rep` times, or the job fails. Sealed bundles therefore
 cannot contain one. `attempts` records how many attempts the rep took. The task job's timeout is derived from the suite
-(`hb.plan.task_job_timeout_minutes`): every rep using every allowed attempt
-fits, and a suite that cannot fit in a GitHub-hosted job fails at planning.
+(`hb.plan.task_job_timeout_minutes`): it allows for every rep using every
+allowed attempt, as an estimate rather than a bound (§10), and a suite that
+cannot fit in a GitHub-hosted job fails at planning.
 
 ### 5.2 `gateway.jsonl`
 
@@ -655,6 +656,28 @@ protected-path restores, out-of-scope edits and infra re-runs.
   whole runs above. In exchange, a provider that stays unreachable through all
   of one request's retries, or fails in another way after such an attempt,
   fails the run too, rather than one rep being run again.
+- **The task job timeout is an estimate, not a bound.** The task job timeout
+  (`hb.plan.task_job_timeout_minutes`, §5.1) gives every allowed attempt the
+  wall-clock limit, the budget grace, the gateway's 120-second drain, the
+  longest probe and 60 seconds for everything else, plus 600 seconds per job
+  for setup. The toolkit's own limits allow an attempt more: 30 seconds for
+  the gateway to listen, 30 for a killed harness to stop, `docker stop --time
+  150` for the gateway and 600 seconds for the workspace snapshot, while the
+  diff and the patch applied for grading are not timed, on a workspace of up
+  to 1 GiB or 200,000 entries. Usually what a job does not use covers this: the
+  grace never extends the wall clock, the probe runs once per rep, and an
+  attempt that is never run leaves its whole allowance unused. For the example
+  suite (3 reps of 1200 seconds, 2 re-runs per rep, 226 minutes) a job taking
+  every limit to its maximum runs out only after 5 or 6 void attempts that each
+  end near their wall-clock limit, more re-runs than an accepted run of a
+  one-task suite may have (I10). A suite with fewer reps or re-runs has less to spare,
+  and with one rep and none a snapshot that takes its full 600 seconds can end
+  the job by itself. A job ended by its timeout writes no bundle, so the run is
+  never sealed: it costs the run, never its integrity, and when a harness
+  causes it with a large workspace it is one of the job failures above.
+  Budgeting the snapshot and the probe once per rep and each toolkit limit per
+  attempt, and timing the diff and the patch apply, would make it a bound; that
+  is left for later.
 
 ## 11. Versioning
 

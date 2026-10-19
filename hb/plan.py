@@ -21,7 +21,9 @@ JOB_SETUP_SECONDS = 600           # image pulls and suite extraction
 def task_job_timeout_minutes(suite: dict, max_probe_timeout_seconds: int) -> int:
     """Worst-case duration of one task job: every rep using every allowed attempt.
 
-    Raises ValueError if the suite cannot fit in a GitHub-hosted job, so such a
+    An estimate, not a bound: the toolkit's own limits (the snapshot timeout, the
+    gateway's stop grace) allow an attempt more than PER_ATTEMPT_OVERHEAD_SECONDS,
+    and the diff is not timed (spec §10). Raises ValueError if the suite cannot fit in a GitHub-hosted job, so such a
     suite fails at planning time rather than in the middle of a run.
     """
     per_attempt = (suite["budget"]["wall_seconds"] + BUDGET_GRACE_SECONDS + GATEWAY_DRAIN_SECONDS
