@@ -336,8 +336,9 @@ def test_harness_that_stops_as_it_is_killed_counts_as_exited(tmp_path):
     assert (lifecycle["termination"], lifecycle["exit_code"]) == ("exited", 0)
 
 
-def test_slow_log_reads_do_not_delay_the_wall_clock_kill(tmp_path):
-    _, out = run(tmp_path, {(1, 1): Script(exit_at=None, log_copy_s=7.0)}, reps=1, budget__wall_seconds=60)
+@pytest.mark.parametrize("log_copy_s", [7.0, 0.7])  # 0.7: the last read starts with under a second left
+def test_slow_log_reads_do_not_delay_the_wall_clock_kill(tmp_path, log_copy_s):
+    _, out = run(tmp_path, {(1, 1): Script(exit_at=None, log_copy_s=log_copy_s)}, reps=1, budget__wall_seconds=60)
     lifecycle = rep_file(out, 1, "lifecycle.json")
     assert lifecycle["termination"] == "wall_timeout"
     assert 60_000 <= lifecycle["ended_at_ms"] - lifecycle["started_at_ms"] <= 60_010  # the last read was cut short

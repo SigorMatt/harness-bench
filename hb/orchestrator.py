@@ -244,7 +244,8 @@ def _watch_harness(docker: Docker, clock: Clock, names: dict, wall_seconds: int,
             raise GatewayFailed("the gateway stopped while the harness was running")
         else:
             next_deadline = wall_deadline if grace_deadline is None else min(wall_deadline, grace_deadline)
-            _poll_records(docker, gateway, tail, timeout=max(1.0, min(LOG_READ_TIMEOUT_S, next_deadline - now)))
+            # Positive: both deadlines were checked above. No floor, or a read could run past them.
+            _poll_records(docker, gateway, tail, timeout=min(LOG_READ_TIMEOUT_S, next_deadline - now))
             if tail.void:
                 _kill_and_wait(docker, clock, harness, timing)
                 termination = "exited"  # the attempt is void; its lifecycle is discarded
