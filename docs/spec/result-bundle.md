@@ -42,7 +42,7 @@ bounds it (§10) instead of adding detection.
 | I7 | Scores are derived, never declared. | The aggregator re-grades every rep from its patch. The `grade.json` inside a bundle is advisory. |
 | I8 | The code under test cannot decide its own verdict. | Probes run next to the patched code and only emit observations. Expected values and the comparison stay in the trusted grader process (§7). |
 | I9 | Edits to tests and interpreter hook files cannot make a rep pass. | Protected paths are restored from pristine before probing. The edits still count as edits: out of scope wherever the task's scope excludes them. |
-| I10 | A result is one complete, first-attempt run, accepted once, under the identity it was submitted as. | The seal job runs only if every task job succeeded. Acceptance requires the signed run identity to equal the submitted repository and run id, `run_attempt = 1` and the full task list, and deduplicates on (repository, run id). Infra re-runs happen only when the gateway voids an attempt, and it voids only on provider-side or setup failures, never on anything that depends only on the harness's own behaviour (§5.2). Failures a harness could cause, such as a gateway that exits with an error, fail the job instead (§6.1). Re-runs run inside the job and are capped per rep and per run. |
+| I10 | A result is one complete, first-attempt run, accepted once, under the identity it was submitted as. | The seal job runs only if every task job succeeded. Acceptance requires the signed run identity to equal the submitted repository and run id, `run_attempt = 1` and the full task list, and deduplicates on (repository, run id). Infra re-runs happen only when the gateway voids an attempt, and it voids only on provider-side or setup failures, never on anything that depends only on the harness's own behaviour (§5.2). Failures a harness could cause, such as a gateway that exits with an error, fail the job instead (§6.1). Re-runs run inside the job and are capped per rep and per run; a task job fails at a void that would take its own re-runs past the run's cap. |
 | I11 | Identifiers cannot disagree with content. | IDs are `content_id()` of canonical JSON (§3.1) and are always recomputed, never accepted as claims. |
 | I12 | Known caches are never counted as edits. | The suite's `ignore_paths` (bytecode, test-runner caches) are dropped when the workspace is snapshotted and again when a patch is applied. Anything else left in `/workspace` is part of the patch, so the adapter contract keeps harness state under `$HOME` (§6). |
 
@@ -177,10 +177,16 @@ are taken by the toolkit just before it starts the harness and when it sees
 the harness stopped. There is no infra-error value: an attempt the gateway
 voided (§5.2) is re-run with a fresh network, gateway and workspace, up to
 `infra.max_reruns_per_rep` times, or the job fails. Sealed bundles therefore
-cannot contain one. `attempts` records how many attempts the rep took. The task job's timeout is derived from the suite
-(`hb.plan.task_job_timeout_minutes`): it allows for every rep using every
-allowed attempt, as an estimate rather than a bound (§10), and a suite that
-cannot fit in a GitHub-hosted job fails at planning.
+cannot contain one. The job also fails, instead of re-running, at a void that
+would take its own re-runs past what the whole run may have
+(`infra.max_rerun_permille` of all the run's reps, rounded down), since seal
+would refuse that run (§6.2). It counts only its own re-runs, so it never stops
+a run that could still be accepted; re-runs spread over several task jobs are
+left to seal. A run of the one-task example suite may have no re-run at all.
+`attempts` records how many attempts the rep took. The task job's timeout is
+derived from the suite (`hb.plan.task_job_timeout_minutes`): it allows for
+every rep using every allowed attempt, as an estimate rather than a bound
+(§10), and a suite that cannot fit in a GitHub-hosted job fails at planning.
 
 ### 5.2 `gateway.jsonl`
 
@@ -445,7 +451,9 @@ of one task in turn:
    time in the file, and failures in a row are reported.
 3. Stop the gateway with `docker stop --time 150`, longer than its 120-second
    drain. Copy out `gateway.jsonl`. If any record is `upstream_failed`, the
-   attempt is void: it is discarded and the rep runs again in fresh containers.
+   attempt is void: it is discarded and the rep runs again in fresh containers,
+   unless that would pass the rep's re-run limit or take this job's own re-runs
+   past the run's cap (§5.1).
 4. Copy out the harness's output and its workspace. The snapshot keeps
    directories, regular files and hard links to them, and skips everything else
    (I6). It is diffed against pristine with `hb.patch.workspace_diff`.
@@ -459,10 +467,11 @@ of one task in turn:
 command that fails or times out, a gateway that does not start, stops while the
 harness runs or exits with a non-zero status (a record or the state file that
 could not be written, a provider that could not be reached, a kill), a malformed gateway
-log, a void on every allowed attempt, or a probe sandbox that cannot start. A
-harness can cause some of these, for example by filling the disk, by filling a
-kernel table the gateway's connections need, or by leaving more than
-the toolkit accepts: 1 GiB of files or 200,000 entries in `/workspace`, or a
+log, a void on every allowed attempt, a void that would take the job's own
+re-runs past the run's cap, or a probe sandbox that cannot start. A harness can
+cause some of these, for example by filling the disk, by filling a kernel table
+the gateway's connections need, or by leaving more than the toolkit accepts:
+1 GiB of files or 200,000 entries in `/workspace`, or a
 gateway log over 256 MiB. That is why they fail the job, which loses the whole
 run, instead of voiding the attempt, which would re-roll one rep. The gateway's
 memory and process limits keep a harness that floods it from taking the runner
@@ -671,16 +680,17 @@ protected-path restores, out-of-scope edits and infra re-runs.
   rep, and an attempt that is never run leaves its whole allowance unused. For
   the example suite (3 reps of 1200 seconds, 2 re-runs per rep, 226 minutes) a
   job taking the listen, stop and snapshot limits to their maximum runs out
-  only after 5 or 6 void attempts that each end near their wall-clock limit,
-  more re-runs than an accepted run of a one-task suite can have (I10). A suite
-  with fewer reps or re-runs has less to spare, and with one rep and none a
-  snapshot that takes its full 600 seconds can end the job by itself. A job
-  ended by its timeout writes no bundle, so the run is never sealed: it costs
-  the run, never its integrity, and when a harness causes it with a large
-  workspace it is one of the job failures above. Budgeting the snapshot and
-  the probe once per rep and each toolkit limit per attempt, and timing the
-  copies, the diff and the patch apply, would bring it close to a bound; that
-  is left for later.
+  only after 5 or 6 void attempts that each end near their wall-clock limit.
+  A run of that one-task suite may have no re-run, so its task job stops at its
+  first void (§5.1); with the same settings, a run may have 5 re-runs only from
+  34 tasks up. A suite with fewer reps or re-runs has less to spare, and with
+  one rep and none a snapshot that takes its full 600 seconds can end the job
+  by itself. A job ended by its timeout writes no bundle, so the run is never
+  sealed: it costs the run, never its integrity, and when a harness causes it
+  with a large workspace it is one of the job failures above. Budgeting the
+  snapshot and the probe once per rep and each toolkit limit per attempt, and
+  timing the copies, the diff and the patch apply, would bring it close to a
+  bound; that is left for later.
 
 ## 11. Versioning
 

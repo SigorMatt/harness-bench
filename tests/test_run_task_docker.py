@@ -242,7 +242,11 @@ def test_two_reps_end_to_end(tmp_path, env):
 def test_void_attempt_runs_again(tmp_path, env):
     env["provider"].fail(401)  # a setup failure on the provider side voids the attempt
     env["provider"].answer({"write": {"pager.py": FIXED}})
-    out = run(tmp_path, env, reps=1)
+    # A run of one task and one rep may have no re-run (spec §5.1), so the job
+    # would stop at the void: at 200 permille, four more tasks allow the run one.
+    example = json.loads((EXAMPLE_SUITE / "suite.json").read_text())["tasks"]
+    tasks = example + [{"id": f"zz-filler-{n}", "category": example[0]["category"]} for n in range(1, 5)]
+    out = run(tmp_path, env, reps=1, tasks=tasks, infra__max_rerun_permille=200)
     lifecycle = rep(out, 1, "lifecycle.json")
     assert lifecycle["attempts"] == 2 and lifecycle["termination"] == "exited"
     assert "upstream_failed" not in rep(out, 1, "gateway.jsonl")

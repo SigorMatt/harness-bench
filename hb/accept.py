@@ -99,10 +99,18 @@ def check_run(run_manifest: dict, task_manifests: dict, bundle_digests: dict, re
     return errors
 
 
+def rerun_allowance(reps_in_run: int, max_rerun_permille: int) -> int:
+    """How many infra re-runs (attempts - 1, summed over all reps) a run of reps_in_run reps may have.
+
+    The task jobs stop at it as well (hb.orchestrator.run_task), so the one
+    rule is written once.
+    """
+    return max_rerun_permille * reps_in_run // 1000
+
+
 def rerun_budget_ok(attempts: list[int], max_rerun_permille: int) -> bool:
     """True when infra re-runs (sum of attempts - 1) stay within the suite's cap."""
-    reruns = sum(a - 1 for a in attempts)
-    return reruns * 1000 <= max_rerun_permille * len(attempts)
+    return sum(a - 1 for a in attempts) <= rerun_allowance(len(attempts), max_rerun_permille)
 
 
 def check_attempts(attempts: list[int], infra: dict) -> list[str]:
