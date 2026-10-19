@@ -33,7 +33,7 @@ import pytest
 
 from hb import profile
 from hb.dockercli import Clock, Docker
-from hb.manifest import extract_bundle, verify_task_bundle
+from hb.manifest import extract_bundle, pack_bundle, verify_task_bundle
 from hb.orchestrator import DockerProbeRunner, GatewayFailed, TaskJob, Timing, run_task
 from hb.schemas import validate
 
@@ -352,6 +352,44 @@ def test_unreachable_provider_fails_the_job(tmp_path, env):
                  timing=TIMING)
     assert not (tmp_path / "out").exists()
     assert leftovers() == []
+
+
+def test_plan_and_seal_inside_the_toolkit_container(tmp_path, env):
+    """bench.yml's plan and seal steps: the toolkit image, no network, read-only inputs.
+
+    Sealing the example run's bundle must give exactly the committed example run manifest."""
+    def toolkit(*args, mounts, variables):
+        argv = ["docker", "run", "--rm", "--network", "none"]
+        for source, target, mode in mounts:
+            argv += ["--mount", f"type=bind,src={source},dst={target}" + (",readonly" if mode == "ro" else "")]
+        for name, value in variables.items():
+            argv += ["--env", f"{name}={value}"]
+        return subprocess.run([*argv, env["toolkit"], *args], capture_output=True, text=True, timeout=300,
+                              check=False)
+
+    plan_out, bundles, seal_out = tmp_path / "plan", tmp_path / "bundles", tmp_path / "seal"
+    for directory in (plan_out, bundles, seal_out):
+        directory.mkdir()
+    proc = toolkit("plan", "--suite", "/suite", "--out", "/out",
+                   mounts=[(EXAMPLE_SUITE, "/suite", "ro"), (plan_out, "/out", "rw")],
+                   variables={"HARNESS_ID": "baseline", "HB_RUN_ATTEMPT": "1"})  # in the test image's registry
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads((plan_out / "tasks.json").read_text()) == [TASK_ID]
+    assert (plan_out / "timeout_minutes").read_text() == "226\n"
+
+    expected = ROOT / "examples" / "run" / "run-manifest.json"
+    run_manifest = json.loads(expected.read_text())
+    (bundles / f"task-bundle-{TASK_ID}").mkdir()  # one directory per artifact, as the seal job downloads them
+    pack_bundle(ROOT / "examples" / "run" / "task-bundles" / TASK_ID,
+                bundles / f"task-bundle-{TASK_ID}" / f"task-bundle-{TASK_ID}.tar")
+    proc = toolkit("seal", "--suite", "/suite", "--bundles", "/bundles", "--out", "/out",
+                   mounts=[(EXAMPLE_SUITE, "/suite", "ro"), (bundles, "/bundles", "ro"), (seal_out, "/out", "rw")],
+                   variables={"HARNESS_ID": "baseline", "HB_REPOSITORY": run_manifest["run"]["repository"],
+                              "HB_RUN_ID": str(run_manifest["run"]["run_id"]), "HB_RUN_ATTEMPT": "1",
+                              "HB_TOOLKIT_IMAGE": run_manifest["release"]["toolkit_image"],
+                              "HB_SUITE_IMAGE": run_manifest["release"]["suite_image"]})
+    assert proc.returncode == 0, proc.stderr
+    assert (seal_out / "run-manifest.json").read_text() == expected.read_text()
 
 
 PROBES = {

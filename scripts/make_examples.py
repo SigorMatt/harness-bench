@@ -28,6 +28,8 @@ sys.path.insert(0, str(ROOT))
 from hb.grade import grade_rep, run_probe_unsandboxed_for_tests  # noqa: E402
 from hb.identity import cohort_from_suite, cohort_id, entry_from_registry, entry_id  # noqa: E402
 from hb.manifest import MANIFEST_NAME, build_task_manifest, pack_bundle, tree_digest  # noqa: E402
+from hb.accept import bundle_artifact_file  # noqa: E402
+from hb.seal import seal_run  # noqa: E402
 
 EXAMPLES = ROOT / "examples"
 DERIVED = ("cohort.json", "entry.json", "release.json", "run")
@@ -172,16 +174,15 @@ def generate(out: Path) -> None:
                 workdir=Path(scratch) / f"rep{spec['rep']}", run_probe=run_probe_unsandboxed_for_tests))
 
         dump(bundle / MANIFEST_NAME, build_task_manifest(bundle, run=RUN, task_id=TASK_ID, reps=suite["reps"]))
-        tar_path = Path(scratch) / f"task-bundle-{TASK_ID}.tar"
-        digest = pack_bundle(bundle, tar_path)
-        dump(out / "run" / "run-manifest.json", {
-            "schema": "hb/run-manifest/1",
-            "run": RUN,
-            "release": {"toolkit_image": TOOLKIT_IMAGE, "suite_image": SUITE_IMAGE},
-            "cohort": cohort,
-            "entry": entry,
-            "tasks": [{"task_id": TASK_ID, "bundle": {"sha256": digest, "size": tar_path.stat().st_size}}],
-        })
+        bundles = Path(scratch) / "bundles"
+        archive = bundles / bundle_artifact_file(TASK_ID)  # as the seal job downloads it
+        archive.parent.mkdir(parents=True)
+        pack_bundle(bundle, archive)
+        # The run manifest is what the seal job would write for this run.
+        dump(out / "run" / "run-manifest.json", seal_run(
+            suite_dir=suite_dir, bundles_dir=bundles, registry=registry, harness_id=HARNESS_ID, run=RUN,
+            release={"toolkit_image": TOOLKIT_IMAGE, "suite_image": SUITE_IMAGE},
+            scratch=Path(scratch) / "seal"))
 
 
 def snapshot(root: Path) -> dict:

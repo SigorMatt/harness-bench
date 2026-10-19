@@ -14,12 +14,14 @@ v1 is deliberately narrow:
   by observation checks that never enter the harness's or the probe's sandbox.
 - **One track:** stock harness configuration, only the model endpoint changed.
 
-**Status: protocol skeleton, model gateway and run-task orchestrator.** This
-repository contains the result-bundle spec, JSON schemas, a tested reference
-library, the model gateway (`hb/gateway.py`), the orchestrator that runs every
-rep of a task in Docker and grades it in a sandbox (`hb/orchestrator.py`), the
-toolkit image's Dockerfiles, a generated example run and workflow skeletons.
-Not yet built: the plan and seal commands, the suite content and the results
+**Status: the benchmark workflow's toolkit is complete; there is no release
+yet.** This repository contains the result-bundle spec, JSON schemas, a tested
+reference library, the model gateway (`hb/gateway.py`), the orchestrator that
+runs every rep of a task in Docker and grades it in a sandbox
+(`hb/orchestrator.py`), the plan and seal commands (`hb/plan.py`,
+`hb/seal.py`), the toolkit image's Dockerfiles, a generated example run and
+the workflows. Not yet built: the release pipeline (building, publishing and
+pinning the images), real harness adapters, the suite content and the results
 site.
 
 ## How results stay fair
@@ -39,7 +41,7 @@ docker/                      toolkit image Dockerfiles
 examples/                    a suite with one task, a registry, and a generated run
 scripts/make_examples.py     regenerates examples; --check fails if they are stale
 tests/                       functional tests
-.github/workflows/bench.yml  reusable benchmark workflow (skeleton)
+.github/workflows/bench.yml  reusable benchmark workflow (image pins are placeholders until a release)
 templates/                   caller workflow for submitters; intake for the results repo
 ```
 

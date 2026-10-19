@@ -158,6 +158,7 @@ writes them.
 Written and attested by the seal job: the run identity, the release images, the
 full cohort and entry keys, and for every suite task (sorted) the digest and
 size of its bundle archive ([`schemas/run-manifest.schema.json`](../../schemas/run-manifest.schema.json)).
+§6.2 lists what is checked before a run is sealed.
 
 ## 5. Records
 
@@ -177,8 +178,9 @@ the harness stopped. There is no infra-error value: an attempt the gateway
 voided (§5.2) is re-run with a fresh network, gateway and workspace, up to
 `infra.max_reruns_per_rep` times, or the job fails. Sealed bundles therefore
 cannot contain one. `attempts` records how many attempts the rep took. The task job's timeout is derived from the suite
-(`hb.plan.task_job_timeout_minutes`): every rep using every allowed attempt
-fits, and a suite that cannot fit in a GitHub-hosted job fails at planning.
+(`hb.plan.task_job_timeout_minutes`): it allows for every rep using every
+allowed attempt, as an estimate rather than a bound (§10), and a suite that
+cannot fit in a GitHub-hosted job fails at planning.
 
 ### 5.2 `gateway.jsonl`
 
@@ -466,6 +468,49 @@ run, instead of voiding the attempt, which would re-roll one rep. The gateway's
 memory and process limits keep a harness that floods it from taking the runner
 down.
 
+### 6.2 Planning and sealing
+
+Two short jobs frame the task jobs. Both run the toolkit image with no network
+and the extracted suite mounted read-only.
+
+**Plan** (`python3 -m hb plan`, `hb.plan.plan_run`) runs before any task job,
+so a run that it can tell could not complete fails before any tokens are
+spent; the task job timeout it writes is an estimate (§10). It refuses
+a harness id that is not in the registry, a task list that is empty, unsorted,
+duplicated or longer than 256 (one GitHub Actions matrix), a listed task whose
+`task.json` is missing or names another task, and a suite whose task jobs
+cannot fit in a hosted job (§5.1). It writes the task ids as one JSON line for
+the matrix, and the task job timeout.
+
+**Seal** (`python3 -m hb seal`, `hb.seal.seal_run`) runs only after every task
+job succeeded. The task bundles are downloaded each into a directory named
+after its artifact, so for every suite task in order seal reads exactly
+`task-bundle-<task>/task-bundle-<task>.tar`, the path acceptance verifies
+(`hb.accept.bundle_artifact_file`); other files are ignored, and a file that
+another artifact carries under the same name cannot take its place. It
+recomputes the cohort and entry from the suite and the registry. Each bundle
+must be a regular file; it is hashed and extracted from the same open file
+(regular-file members only, §4.1), and must verify against its own manifest
+and name this run, this task and the suite's rep count. Every rep's lifecycle
+must name its task, its rep and the registry's harness image. The attempts of
+all reps must stay within the suite's infra rules (`hb.accept.check_attempts`),
+and the run must be a first attempt (I10). Only then is the run manifest
+written, with each bundle's digest and size, and attested.
+
+Sealing adds no trust: other jobs in the caller's workflow can upload
+artifacts too, so acceptance verifies every bundle's own attestation and
+repeats the run-level checks (§8). A run that fails any check made here is
+never sealed. Schema validation and re-grading happen only at acceptance, and
+the lifecycle checks are seal's own consistency checks; acceptance relies on
+the attestation of the pinned toolkit that wrote those records.
+`scripts/make_examples.py` builds the example run manifest with the same
+function.
+
+A run that is not a first attempt can never be accepted, so plan, run-task
+and seal all refuse one before doing anything: after GitHub's "re-run failed
+jobs" or "re-run all jobs", no tokens are spent on a run that could not
+count. Start a new run instead.
+
 ## 7. Grading
 
 The same function, `hb.grade.grade_rep`, runs inside the run (advisory) and at
@@ -612,6 +657,30 @@ protected-path restores, out-of-scope edits and infra re-runs.
   whole runs above. In exchange, a provider that stays unreachable through all
   of one request's retries, or fails in another way after such an attempt,
   fails the run too, rather than one rep being run again.
+- **The task job timeout is an estimate, not a bound.** The task job timeout
+  (`hb.plan.task_job_timeout_minutes`, §5.1) gives every allowed attempt the
+  wall-clock limit, the budget grace, the gateway's 120-second drain, the
+  longest probe and 60 seconds for everything else, plus 600 seconds per job
+  for setup. The toolkit's own limits allow an attempt more: 30 seconds for
+  the gateway to listen, 30 for a killed harness to stop, a 150-second stop
+  grace for the gateway (210 for the `docker stop` call) and 600 seconds for
+  the workspace snapshot, and any other Docker call may take 120, while the
+  tree copies, the diff and the patch applied for grading are not timed, on a
+  workspace of up to 1 GiB or 200,000 entries. Usually what a job does not use
+  covers this: the grace never extends the wall clock, the probe runs once per
+  rep, and an attempt that is never run leaves its whole allowance unused. For
+  the example suite (3 reps of 1200 seconds, 2 re-runs per rep, 226 minutes) a
+  job taking the listen, stop and snapshot limits to their maximum runs out
+  only after 5 or 6 void attempts that each end near their wall-clock limit,
+  more re-runs than an accepted run of a one-task suite can have (I10). A suite
+  with fewer reps or re-runs has less to spare, and with one rep and none a
+  snapshot that takes its full 600 seconds can end the job by itself. A job
+  ended by its timeout writes no bundle, so the run is never sealed: it costs
+  the run, never its integrity, and when a harness causes it with a large
+  workspace it is one of the job failures above. Budgeting the snapshot and
+  the probe once per rep and each toolkit limit per attempt, and timing the
+  copies, the diff and the patch apply, would bring it close to a bound; that
+  is left for later.
 
 ## 11. Versioning
 
@@ -634,8 +703,9 @@ cohort.
 | `hb/orchestrator.py` | run-task: rep attempts, wall clock and budget grace, voids and re-runs, probe sandbox, task bundle |
 | `hb/transfer.py` | tar streams into and out of containers: packing toolkit trees, the workspace snapshot |
 | `hb/dockercli.py` | Docker CLI calls as argument lists with timeouts, and the clock |
-| `hb/cli.py` | `python3 -m hb gateway` and `run-task` in the toolkit image; inputs from the environment |
-| `hb/plan.py` | values derived from the suite, such as the task job timeout |
+| `hb/cli.py` | `python3 -m hb plan`, `run-task`, `seal` and `gateway` in the toolkit image; inputs from the environment |
+| `hb/plan.py` | values derived from the suite: the task matrix and the task job timeout (`plan_run`) |
+| `hb/seal.py` | sealing a run: one verified bundle per task, run identity, re-run limits, the run manifest |
 | `hb/grade.py` | observation comparison, verdict, probe runner contract, `grade_rep` |
 | `hb/metrics.py` | usage and cost from gateway records |
 | `hb/accept.py` | expected files, attestation commands, run acceptance, attempt rules, dedup key |
