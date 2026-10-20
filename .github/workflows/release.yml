@@ -1,0 +1,206 @@
+# Release workflow (spec §6.3). Builds the toolkit and suite images from one
+# commit of main (the build commit), checks them the way bench.yml uses them,
+# publishes them to GHCR with build-provenance attestations, and uploads
+# release-pins.json for the maintainer, who then makes the release commit:
+#
+#   gh run download <run id> --name release-pins-<version>
+#   git switch --detach <build sha>
+#   python3 scripts/release.py pin release-pins.json
+#   git commit --all --message "Release <version>"
+#   python3 scripts/release.py verify
+#   git tag --annotate <version> --message "Release <version>"
+#   git push origin <version>
+#
+# This workflow cannot make that commit: a workflow's own token may not change
+# workflow files. The release commit is pushed as the tag only and never merged
+# into main, whose pins stay placeholders.
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version, vMAJOR.MINOR.PATCH
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash  # bash -eo pipefail: a failing command in a pipeline fails the step
+
+jobs:
+  check:
+    # Validating the inputs needs packages from PyPI, so it runs here, in a job
+    # with no write permission whose results the release job does not use: where
+    # the images are built, pushed and attested, only this repository's code, its
+    # pinned actions and images run (and git, which the toolkit base installs
+    # from Debian's archive).
+    if: github.repository == 'SigorMatt/harness-bench' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - run: pip install "jsonschema>=4.18" "referencing>=0.30"
+      - name: Check the version and the release inputs
+        env:
+          VERSION: ${{ inputs.version }}  # passed as data, never interpolated into the script
+        run: |
+          # Refuses a malformed version, a .gitattributes file, a missing suite or
+          # registry, anything that fails its schema, and a suite plan would refuse.
+          python3 scripts/release.py inputs --version "$VERSION"
+
+  images:
+    # Only from main of this repository, so the provenance names refs/heads/main,
+    # which scripts/release.py verify requires.
+    needs: check
+    if: github.repository == 'SigorMatt/harness-bench' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write      # push the images to GHCR
+      id-token: write      # signing identity for the attestations
+      attestations: write  # store the attestations
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"  # nothing written into the checkout the images are built from
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Name the images
+        id: inputs
+        env:
+          VERSION: ${{ inputs.version }}  # passed as data, never interpolated into the script
+        run: |
+          # The runner's own python3, and only the standard library (hb/release.py).
+          python3 scripts/release.py names --version "$VERSION" >> "$GITHUB_OUTPUT"
+          status=0
+          git ls-remote --exit-code --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "refs/tags/$VERSION" > /dev/null || status=$?
+          if [ "$status" -eq 0 ]; then echo "::error::the tag $VERSION already exists"; exit 1; fi
+          if [ "$status" -ne 2 ]; then echo "::error::cannot list the tags (git exit status $status)"; exit 1; fi
+
+      - name: Build the images
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          TOOLKIT: ${{ steps.inputs.outputs.toolkit }}
+          SUITE: ${{ steps.inputs.outputs.suite }}
+          SUITE_DIR: ${{ steps.inputs.outputs.suite_dir }}
+          REGISTRY_FILE: ${{ steps.inputs.outputs.registry }}
+        run: |
+          labels=(--label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+                  --label "org.opencontainers.image.revision=$GITHUB_SHA"
+                  --label "org.opencontainers.image.version=$VERSION")
+          # The base images are pinned by digest in docker/toolkit-base.Dockerfile.
+          docker build --provenance=false --file docker/toolkit-base.Dockerfile --tag hb-release/toolkit-base:build docker
+          docker build --provenance=false --file docker/toolkit.Dockerfile \
+            --build-arg BASE_IMAGE=hb-release/toolkit-base:build --build-arg "REGISTRY_FILE=$REGISTRY_FILE" \
+            "${labels[@]}" --tag "$TOOLKIT:$VERSION" .
+          docker build --provenance=false --file docker/suite.Dockerfile "${labels[@]}" --tag "$SUITE:$VERSION" "$SUITE_DIR"
+
+      - name: Check the images as bench.yml uses them
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          TOOLKIT: ${{ steps.inputs.outputs.toolkit }}
+          SUITE: ${{ steps.inputs.outputs.suite }}
+          SUITE_DIR: ${{ steps.inputs.outputs.suite_dir }}
+          REGISTRY_FILE: ${{ steps.inputs.outputs.registry }}
+          HARNESS_ID: ${{ steps.inputs.outputs.harness }}
+          HB_RUN_ATTEMPT: "1"
+        run: |
+          # The suite image holds exactly the suite tree, and the toolkit exactly the registry.
+          cid=$(docker create "$SUITE:$VERSION" /bin/true)
+          docker cp "$cid:/suite" "$RUNNER_TEMP/suite"
+          docker rm "$cid"
+          diff --recursive --no-dereference "$SUITE_DIR" "$RUNNER_TEMP/suite"
+          docker run --rm --network none --entrypoint cat "$TOOLKIT:$VERSION" /opt/hb/registry.json | cmp - "$REGISTRY_FILE"
+          # Plan the run exactly as bench.yml's first job does.
+          mkdir -p "$RUNNER_TEMP/plan"
+          docker run --rm --network none \
+            --mount "type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/plan,dst=/out" \
+            --env HARNESS_ID --env HB_RUN_ATTEMPT \
+            "$TOOLKIT:$VERSION" plan --suite /suite --out /out
+          docker run --rm --network none "$TOOLKIT:$VERSION" gateway --help > /dev/null
+
+      - name: Push the images
+        id: push
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          TOOLKIT: ${{ steps.inputs.outputs.toolkit }}
+          SUITE: ${{ steps.inputs.outputs.suite }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          for image in "toolkit=$TOOLKIT" "suite=$SUITE"; do
+            name=${image%%=*} repository=${image#*=}
+            docker push --quiet "$repository:$VERSION"
+            # The digest the push recorded for this repository: exactly one.
+            ref=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$repository:$VERSION" \
+                  | grep -x "$repository@sha256:[0-9a-f]\{64\}" || true)
+            if [ "$(printf '%s' "$ref" | grep -c .)" -ne 1 ]; then
+              echo "::error::expected one digest for $repository, got: $ref"; exit 1
+            fi
+            docker pull --quiet "$ref" > /dev/null  # the registry serves exactly this digest
+            echo "$name=$ref" >> "$GITHUB_OUTPUT"
+            echo "${name}_digest=${ref#*@}" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Attest the toolkit image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.inputs.outputs.toolkit }}
+          subject-digest: ${{ steps.push.outputs.toolkit_digest }}
+          push-to-registry: true
+
+      - name: Attest the suite image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.inputs.outputs.suite }}
+          subject-digest: ${{ steps.push.outputs.suite_digest }}
+          push-to-registry: true
+
+      - name: Write the release pins
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          TOOLKIT_REF: ${{ steps.push.outputs.toolkit }}
+          SUITE_REF: ${{ steps.push.outputs.suite }}
+        run: |
+          python3 scripts/release.py pins --version "$VERSION" --build-sha "$GITHUB_SHA" \
+            --toolkit-image "$TOOLKIT_REF" --suite-image "$SUITE_REF" --out "$RUNNER_TEMP/release-pins.json"
+          {
+            echo "### $VERSION: images built from $GITHUB_SHA"
+            echo '```json'
+            cat "$RUNNER_TEMP/release-pins.json"
+            echo '```'
+            echo "Next, in a full, clean clone with the gh CLI logged in (spec §6.3):"
+            echo '```'
+            echo "gh run download $GITHUB_RUN_ID --repo $GITHUB_REPOSITORY --name release-pins-$VERSION"
+            echo "git switch --detach $GITHUB_SHA"
+            echo "python3 scripts/release.py pin release-pins.json"
+            echo "git commit --all --message 'Release $VERSION'"
+            echo "python3 scripts/release.py verify"
+            echo "git tag --annotate $VERSION --message 'Release $VERSION'"
+            echo "git push origin $VERSION"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the release pins
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-pins-${{ steps.inputs.outputs.version }}
+          path: ${{ runner.temp }}/release-pins.json
+          if-no-files-found: error

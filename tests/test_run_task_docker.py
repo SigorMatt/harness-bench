@@ -33,7 +33,7 @@ import pytest
 
 from hb import profile
 from hb.dockercli import Clock, Docker
-from hb.manifest import extract_bundle, pack_bundle, verify_task_bundle
+from hb.manifest import extract_bundle, pack_bundle, tree_digest, verify_task_bundle
 from hb.orchestrator import DockerProbeRunner, GatewayFailed, TaskJob, Timing, run_task
 from hb.schemas import validate
 
@@ -424,3 +424,38 @@ def test_probe_sandbox_follows_the_runner_contract(tmp_path, env):
     assert probe("crash.py") == b'{"partial": true}'  # a crash still returns what was written
     assert probe("flood.py") == b""                 # more than a report can be
     assert leftovers("probe-test") == []
+
+
+def test_suite_image_holds_exactly_the_suite(tmp_path):
+    """docker/suite.Dockerfile, read back the way bench.yml reads it (create, copy out, remove).
+
+    A .dockerignore inside the suite drops nothing: the Dockerfile's own ignore
+    file, which has no patterns, takes precedence."""
+    if shutil.which("docker") is None:
+        pytest.skip("needs the docker command")
+    suite = tmp_path / "suite"
+    shutil.copytree(EXAMPLE_SUITE, suite)
+    (suite / ".dockerignore").write_text("tasks\n")
+    tag = "hb-test/suite:latest"
+    build(suite, ROOT / "docker" / "suite.Dockerfile", tag)
+    try:
+        cid = sh("docker", "create", tag, "/bin/true")  # never started: the image has no /bin/true
+        try:
+            sh("docker", "cp", f"{cid}:/suite", str(tmp_path / "copied"))
+        finally:
+            sh("docker", "rm", cid)
+    finally:
+        sh("docker", "image", "rm", tag)
+    assert tree_digest(tmp_path / "copied") == tree_digest(suite)
+    assert (tmp_path / "copied" / "tasks" / TASK_ID / "task.json").is_file()
+
+
+def test_toolkit_build_refuses_a_missing_registry_file(env):
+    # An empty REGISTRY_FILE copies the whole build context to /opt/hb/registry.json, as a
+    # directory; the build's own check of what it copied is what fails.
+    base = os.environ.get("HB_TEST_BASE_IMAGE", "python:3.12-slim")
+    proc = subprocess.run(["docker", "build", "--progress=plain", "--file", str(ROOT / "docker" / "toolkit.Dockerfile"),
+                           "--build-arg", f"BASE_IMAGE={base}", "--tag", "hb-test/toolkit-no-registry:latest",
+                           str(ROOT)], capture_output=True, text=True, check=False)
+    assert proc.returncode != 0
+    assert "IsADirectoryError" in proc.stderr and "/opt/hb/registry.json" in proc.stderr

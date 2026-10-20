@@ -21,8 +21,10 @@ permissions:
 
 jobs:
   bench:
-    # Pin to a release commit, never a branch: results are only accepted from
-    # the signer commits listed in the results repository's release table.
+    # Pin to a release commit by its full sha, never a branch or a tag name:
+    # results are only accepted from the signer commits listed in the results
+    # repository's release table. A release tag is annotated, so its commit is
+    #   git rev-parse vMAJOR.MINOR.PATCH^{commit}
     uses: SigorMatt/harness-bench/.github/workflows/bench.yml@0000000000000000000000000000000000000000
     with:
       harness_id: ${{ inputs.harness_id }}

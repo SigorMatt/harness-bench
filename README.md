@@ -14,15 +14,16 @@ v1 is deliberately narrow:
   by observation checks that never enter the harness's or the probe's sandbox.
 - **One track:** stock harness configuration, only the model endpoint changed.
 
-**Status: the benchmark workflow's toolkit is complete; there is no release
-yet.** This repository contains the result-bundle spec, JSON schemas, a tested
-reference library, the model gateway (`hb/gateway.py`), the orchestrator that
-runs every rep of a task in Docker and grades it in a sandbox
+**Status: the benchmark workflow and the release pipeline are complete; there
+is no release yet.** This repository contains the result-bundle spec, JSON
+schemas, a tested reference library, the model gateway (`hb/gateway.py`), the
+orchestrator that runs every rep of a task in Docker and grades it in a sandbox
 (`hb/orchestrator.py`), the plan and seal commands (`hb/plan.py`,
-`hb/seal.py`), the toolkit image's Dockerfiles, a generated example run and
-the workflows. Not yet built: the release pipeline (building, publishing and
-pinning the images), real harness adapters, the suite content and the results
-site.
+`hb/seal.py`), the release tooling (`hb/release.py`,
+`scripts/release.py`), the image Dockerfiles, a generated example run and
+the workflows. Not yet built: the suite content (`suites/py-maint/`) and the
+registry of real harness adapters (`registry.json`), which the first release
+needs, and the results site.
 
 ## How results stay fair
 
@@ -37,11 +38,13 @@ signatures, compares values for equality and recomputes. See
 docs/spec/result-bundle.md   the spec
 schemas/                     JSON Schemas (draft 2020-12)
 hb/                          reference library, model gateway, orchestrator and toolkit CLI
-docker/                      toolkit image Dockerfiles
+docker/                      toolkit and suite image Dockerfiles
 examples/                    a suite with one task, a registry, and a generated run
 scripts/make_examples.py     regenerates examples; --check fails if they are stale
+scripts/release.py           release steps: pin the images, verify a release commit, release table entry
 tests/                       functional tests
-.github/workflows/bench.yml  reusable benchmark workflow (image pins are placeholders until a release)
+.github/workflows/bench.yml  reusable benchmark workflow (image pins are placeholders on main)
+.github/workflows/release.yml  builds, checks, publishes and attests a release's images
 templates/                   caller workflow for submitters; intake for the results repo
 ```
 
@@ -66,5 +69,20 @@ tests/test_run_task_docker.py` builds the toolkit image and a stub harness and
 needs a local Docker daemon. `HB_TEST_BASE_IMAGE` picks the toolkit's base image;
 the test that runs the toolkit in its own container needs one with git and the
 docker CLI, as `docker/toolkit-base.Dockerfile` builds.
+
+## Releasing
+
+Once, before the first release: add a repository ruleset that blocks deleting
+and moving `v*` tags, since a release commit is reachable only from its tag.
+
+A maintainer starts the `release` workflow on main with a version
+(`vMAJOR.MINOR.PATCH`). It checks the release inputs, builds the toolkit and
+suite images, checks them, publishes them to GHCR with build provenance and
+uploads `release-pins.json`. After the first run, make both GHCR packages
+public. The release commit, which only pins those images in `bench.yml`, is
+then made and checked in a full clone with `scripts/release.py pin` and
+`verify` (which needs the gh CLI logged in), and pushed as the version's tag,
+never merged into main. The workflow run's summary lists the exact commands;
+[spec §6.3](docs/spec/result-bundle.md) explains why each step is there.
 
 License: Apache-2.0.

@@ -1,0 +1,2 @@
+# No patterns, on purpose. This file takes precedence over any .dockerignore inside
+# the suite, so docker/suite.Dockerfile copies every file of the suite (spec §6.3).

@@ -26,9 +26,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from hb.grade import grade_rep, run_probe_unsandboxed_for_tests  # noqa: E402
-from hb.identity import cohort_from_suite, cohort_id, entry_from_registry, entry_id  # noqa: E402
+from hb.identity import cohort_from_suite, entry_from_registry  # noqa: E402
 from hb.manifest import MANIFEST_NAME, build_task_manifest, pack_bundle, tree_digest  # noqa: E402
 from hb.accept import bundle_artifact_file  # noqa: E402
+from hb.release import release_entry  # noqa: E402
 from hb.seal import seal_run  # noqa: E402
 
 EXAMPLES = ROOT / "examples"
@@ -36,7 +37,6 @@ DERIVED = ("cohort.json", "entry.json", "release.json", "run")
 
 TOOLKIT_IMAGE = "ghcr.io/sigormatt/hb-toolkit@sha256:de1c3876583de809d67dab8a38fc05fe7c669e7f511b6a383eca295cb8420abe"
 SUITE_IMAGE = "ghcr.io/sigormatt/hb-suite-py-maint@sha256:cd81d58c20a810329cb37daac6035921d3efc80c1cf0bf83e4bb2d95f110a9a2"
-SIGNER_WORKFLOW = "SigorMatt/harness-bench/.github/workflows/bench.yml"
 SIGNER_SHA = hashlib.sha1(b"example:release").hexdigest()
 RUN = {"repository": "example-user/hb-runs", "run_id": 18000000001, "run_attempt": 1}
 HARNESS_ID = "baseline"
@@ -133,16 +133,9 @@ def generate(out: Path) -> None:
     entry = entry_from_registry(registry, HARNESS_ID)
     dump(out / "cohort.json", cohort)
     dump(out / "entry.json", entry)
-    dump(out / "release.json", {
-        "schema": "hb/release/1",
-        "signer_workflow": SIGNER_WORKFLOW,
-        "signer_sha": SIGNER_SHA,
-        "toolkit_image": TOOLKIT_IMAGE,
-        "suite_image": SUITE_IMAGE,
-        "cohort_ids": [cohort_id(cohort)],
-        "entry_ids": sorted(entry_id(entry_from_registry(registry, h["id"])) for h in registry["harnesses"]),
-        "task_ids": sorted(t["id"] for t in suite["tasks"]),
-    })
+    # The release table entry as scripts/release.py entry computes it at a release commit.
+    dump(out / "release.json", release_entry(suite_dir=suite_dir, registry=registry, toolkit_image=TOOLKIT_IMAGE,
+                                             suite_image=SUITE_IMAGE, signer_sha=SIGNER_SHA))
 
     pager = (repo / "pager.py").read_text(encoding="utf-8")
     tests = (repo / "tests" / "test_pager.py").read_text(encoding="utf-8")
