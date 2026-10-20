@@ -30,7 +30,7 @@ import subprocess
 from pathlib import Path, PurePosixPath
 
 from .identity import cohort_from_suite, cohort_id, entry_from_registry, entry_id
-from .manifest import VerificationError, tree_digest
+from .manifest import VerificationError, list_files, tree_digest
 from .plan import PlanError, plan_run
 
 REPOSITORY = "SigorMatt/harness-bench"
@@ -264,10 +264,12 @@ class Git:
         return entries
 
     def export(self, commit: str, paths: list[str], dest: Path) -> None:
-        """Write the committed bytes of every file under paths into dest.
+        """Write the committed bytes of every file under paths into dest, a new directory.
 
         Read with cat-file, so no checkout filter, line-ending conversion or
-        export attribute applies. Only regular files are allowed.
+        export attribute applies. Only regular files are allowed, and dest must
+        then hold exactly the committed paths, which a case-insensitive file
+        system does not when two of them differ only in case.
         """
         entries = self.tree(commit, paths)
         for path in paths:
@@ -286,9 +288,17 @@ class Git:
                 raise ReleaseError(f"git cat-file could not read {path} at {commit}: {' '.join(header)}")
             size, start = int(header[2]), header_end + 1
             target = Path(dest).joinpath(*PurePosixPath(path).parts)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(blobs[start:start + size])
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(blobs[start:start + size])
+            except OSError as exc:
+                raise ReleaseError(f"{path} at {commit} cannot be written here ({exc})") from None
             offset = start + size + 1  # the blob is followed by a newline
+        committed = {path for _, _, path in entries}
+        written = {f["path"] for f in list_files(Path(dest), canonical_paths=False)}
+        if written != committed:
+            raise ReleaseError(f"this file system cannot hold apart the paths of {commit}, such as names that differ "
+                               f"only in case: {sorted(written ^ committed)}")
 
 
 def check_release_commit(git: Git, commit: str) -> dict:

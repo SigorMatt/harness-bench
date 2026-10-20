@@ -589,6 +589,10 @@ Anyone with a GitHub login can repeat these checks from the tag.
 `scripts/release.py entry` computes the release table entry (§3.4) from the
 release commit's committed bytes alone, read with `git cat-file` so that no
 checkout filter or setting of the clone applies (`hb.release.release_entry_at`).
+It writes those bytes to a new directory and refuses the commit unless the
+directory then holds exactly the committed paths: on a case-insensitive file
+system (the default on macOS and Windows), two paths that differ only in case
+become one file, and the suite digest would not be the suite image's.
 `scripts/make_examples.py` builds the example entry with `release_entry`, the
 function `release_entry_at` calls.
 

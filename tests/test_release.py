@@ -400,6 +400,36 @@ def test_export_takes_only_committed_regular_files_that_exist(repo, tmp_path):
         Git(repo).export("HEAD", [release.SUITE_DIR], tmp_path / "b")
 
 
+@pytest.mark.parametrize("names", [("Foo.py", "foo.py"), ("Docs/a.txt", "docs/b.txt"), ("A", "a/b.txt"),
+                                   ("B/x.py", "b")])
+def test_export_refuses_paths_the_file_system_cannot_hold_apart(repo, tmp_path, monkeypatch, names):
+    # Two paths in git and on Linux, but not on a case-insensitive file system (macOS and Windows by default),
+    # where the exported tree, and so the suite digest and the cohort, would not be the committed one.
+    for name in names:
+        (repo / release.SUITE_DIR / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / release.SUITE_DIR / name).write_text(name)
+    git(repo, "add", ".")
+    git(repo, "commit", "--quiet", "--message", "names that differ only in case")
+    Git(repo).export("HEAD", [release.SUITE_DIR], tmp_path / "linux")
+    assert all((tmp_path / "linux" / release.SUITE_DIR / name).read_text() == name for name in names)
+    folded = tmp_path / "folded"
+    write_bytes, mkdir = Path.write_bytes, Path.mkdir
+
+    def existing(path):  # the entry a case-insensitive file system opens for path
+        if folded not in path.parents:
+            return path
+        found = folded
+        for part in path.relative_to(folded).parts:
+            same = [p for p in found.iterdir() if p.name.casefold() == part.casefold()] if found.is_dir() else []
+            found = same[0] if same else found / part
+        return found
+
+    monkeypatch.setattr(Path, "write_bytes", lambda path, data: write_bytes(existing(path), data))
+    monkeypatch.setattr(Path, "mkdir", lambda path, *args, **kwargs: mkdir(existing(path), *args, **kwargs))
+    with pytest.raises(ReleaseError, match="cannot hold apart|cannot be written"):
+        Git(repo).export("HEAD", [release.SUITE_DIR], folded)
+
+
 def test_a_release_commit_whose_build_has_gitattributes_is_refused(repo):
     (repo / ".gitattributes").write_text("*.json -text\n")
     git(repo, "add", ".")
