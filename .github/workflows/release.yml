@@ -59,8 +59,10 @@ jobs:
           VERSION: ${{ inputs.version }}  # passed as data, never interpolated into the script
         run: |
           # Refuses a malformed version, a .gitattributes file, a missing suite or
-          # registry, anything that fails its schema, a suite plan would refuse,
-          # and a task whose repo, instruction, probe or checks are not there.
+          # registry, anything that fails its schema, a suite plan would refuse, a
+          # task whose repo, instruction, probe or checks are not there, an ignore
+          # file at the suite's root, and suite paths Windows or a case-insensitive
+          # file system would not keep as they are.
           python3 scripts/release.py inputs --version "$VERSION"
 
   images:

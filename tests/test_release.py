@@ -269,6 +269,59 @@ def test_inputs_refuse_a_symlink_in_the_suite(repo):
         release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
 
 
+@pytest.mark.parametrize("name", [".dockerignore", ".containerignore", ".DockerIgnore"])
+def test_inputs_refuse_an_ignore_file_at_the_suite_root(repo, name):
+    # The suite directory is the suite image's build context: the classic builder, Podman and
+    # Buildah read these there (case-insensitively on macOS and Windows) and leave files out.
+    (repo / release.SUITE_DIR / name).write_text("tasks\n")
+    with pytest.raises(ReleaseError, match="would leave files out"):
+        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+    (repo / release.SUITE_DIR / name).unlink()
+    (repo / release.SUITE_DIR / name).symlink_to("missing")  # even one that points nowhere
+    with pytest.raises(ReleaseError, match="would leave files out"):
+        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+
+
+@pytest.mark.parametrize("names", [("x:y.txt",), ("a\\b.txt",), ("NUL",), ("tasks/con.txt",), ("a?b",),
+                                   ("trail.",), ("dir /x",), ("Foo.py", "foo.py"),
+                                   ("Docs/a.txt", "docs/b.txt"), ("A", "a/b.txt")])
+def test_inputs_refuse_paths_some_file_system_cannot_hold(repo, names):
+    # So that scripts/release.py entry can rebuild the suite tree on any maintainer's machine.
+    for name in names:
+        target = repo / release.SUITE_DIR / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(name)
+    with pytest.raises(ReleaseError, match="not a portable path|differ only in case"):
+        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+
+
+def test_portable_paths():
+    release.check_portable_paths(["suite.json", "tasks/a/task.json", "tasks/a/repo/x.py", "tasks/b/task.json",
+                                  ".hidden", "tasks/a/repo/.github/ci.yml", "console.py", "nul_test.py"])
+
+
+NAMES = ["ok.py", ".hidden", "console.py", "COM0", "nul_test.py", "NUL", "nul", "con.txt", "COM1.json",
+         "lpt9.a.b", "nul .txt", "CONOUT$", "com\u00b9", "a?b", "a<b", "a>b", 'a"b', "a|b", "a*b", "x:y",
+         "a\\b", "tab\tname", "trail.", "trail ", "...", ".. "]
+
+
+@pytest.mark.skipif(not hasattr(__import__("ntpath"), "isreserved"), reason="ntpath.isreserved is new in 3.13")
+@pytest.mark.parametrize("name", NAMES)
+def test_reserved_names_are_pythons(name):
+    import ntpath
+    if ":" in name or "\\" in name:  # isreserved() reads a path: a drive, or two names; refused here as names
+        assert release.name_problem(name) is not None
+    else:
+        assert (release.name_problem(name) is not None) == ntpath.isreserved(name)
+
+
+def test_a_dockerignore_deeper_in_the_suite_is_an_ordinary_file(repo):
+    # No builder reads it, so it is copied like any other file.
+    task = next((repo / release.SUITE_DIR / "tasks").iterdir())
+    (task / ".dockerignore").write_text("repo\n")
+    assert release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)["suite_id"] == "py-maint"
+
+
 def test_pins_command_writes_only_what_pin_accepts(tmp_path):
     out = tmp_path / "release-pins.json"
     args = ["pins", "--version", "v0.1.0", "--build-sha", "c" * 40, "--toolkit-image", TOOLKIT_REF,
@@ -398,6 +451,22 @@ def test_export_takes_only_committed_regular_files_that_exist(repo, tmp_path):
     git(repo, "commit", "--quiet", "--message", "symlink")
     with pytest.raises(ReleaseError, match="link.json at HEAD is not a regular file"):
         Git(repo).export("HEAD", [release.SUITE_DIR], tmp_path / "b")
+
+
+@pytest.mark.parametrize("name", ["a\\..\\..\\escape.txt", "c:escape.txt", "sub/x:y.txt", "NUL", "sub/con.json",
+                                  "trail."])
+def test_export_refuses_paths_another_file_system_reads_differently(repo, tmp_path, name):
+    # Legal names in git and on Linux; on Windows a backslash separates and a colon names a drive,
+    # so writing them could leave the scratch directory. Refused before anything is written.
+    target = repo / release.SUITE_DIR / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x")
+    git(repo, "add", ".")
+    git(repo, "commit", "--quiet", "--message", "odd name")
+    dest = tmp_path / "out"
+    with pytest.raises(ReleaseError, match="not a portable path"):
+        Git(repo).export("HEAD", [release.SUITE_DIR], dest)
+    assert not dest.exists()
 
 
 @pytest.mark.parametrize("names", [("Foo.py", "foo.py"), ("Docs/a.txt", "docs/b.txt"), ("A", "a/b.txt"),

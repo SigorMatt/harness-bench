@@ -3,8 +3,9 @@
 
 Run by .github/workflows/release.yml:
   inputs --version vX.Y.Z   (unprivileged job) check the version, the release suite and
-                            registry against their schemas and plan, and the paths each
-                            task names; needs jsonschema
+                            registry against their schemas and plan, the paths each task
+                            names, and that the suite image holds every suite file and the
+                            suite tree can be rebuilt on any OS; needs jsonschema
   names --version vX.Y.Z    (release job, standard library only) print the image names
                             and inputs as key=value lines for $GITHUB_OUTPUT
   pins --version ... --build-sha ... --toolkit-image ... --suite-image ... --out FILE
