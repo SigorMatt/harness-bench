@@ -426,36 +426,58 @@ def test_probe_sandbox_follows_the_runner_contract(tmp_path, env):
     assert leftovers("probe-test") == []
 
 
-def test_suite_image_holds_exactly_the_suite(tmp_path):
-    """docker/suite.Dockerfile, read back the way bench.yml reads it (create, copy out, remove).
-
-    A .dockerignore inside the suite drops nothing: the Dockerfile's own ignore
-    file, which has no patterns, takes precedence."""
-    if shutil.which("docker") is None:
-        pytest.skip("needs the docker command")
-    suite = tmp_path / "suite"
-    shutil.copytree(EXAMPLE_SUITE, suite)
-    (suite / ".dockerignore").write_text("tasks\n")
+def suite_image_tree(suite: Path, out: Path) -> Path:
+    """Build docker/suite.Dockerfile from suite and read /suite back the way bench.yml does."""
     tag = "hb-test/suite:latest"
     build(suite, ROOT / "docker" / "suite.Dockerfile", tag)
     try:
         cid = sh("docker", "create", tag, "/bin/true")  # never started: the image has no /bin/true
         try:
-            sh("docker", "cp", f"{cid}:/suite", str(tmp_path / "copied"))
+            sh("docker", "cp", f"{cid}:/suite", str(out))
         finally:
             sh("docker", "rm", cid)
     finally:
         sh("docker", "image", "rm", tag)
-    assert tree_digest(tmp_path / "copied") == tree_digest(suite)
-    assert (tmp_path / "copied" / "tasks" / TASK_ID / "task.json").is_file()
+    return out
+
+
+def test_suite_image_holds_exactly_the_suite(tmp_path):
+    """Dotfiles and a .dockerignore below the suite's root are ordinary files to docker build, with or
+    without BuildKit (an ignore file at the root is refused by scripts/release.py inputs)."""
+    if shutil.which("docker") is None:
+        pytest.skip("needs the docker command")
+    suite = tmp_path / "suite"
+    shutil.copytree(EXAMPLE_SUITE, suite)
+    (suite / ".hidden").write_text("kept\n")
+    (suite / "tasks" / TASK_ID / ".dockerignore").write_text("repo\n")
+    copied = suite_image_tree(suite, tmp_path / "copied")
+    assert tree_digest(copied) == tree_digest(suite)
+    assert (copied / "tasks" / TASK_ID / "repo" / "pager.py").is_file()
+
+
+def buildkit() -> bool:
+    if os.environ.get("DOCKER_BUILDKIT") == "0" or shutil.which("docker") is None:
+        return False
+    return subprocess.run(["docker", "buildx", "version"], capture_output=True, check=False).returncode == 0
+
+
+@pytest.mark.skipif(not buildkit(), reason="BuildKit only: the classic builder does not read the Dockerfile's ignore file")
+def test_with_buildkit_the_dockerfiles_ignore_file_takes_precedence(tmp_path):
+    # The second guard behind the inputs check: docker/suite.Dockerfile.dockerignore has no patterns.
+    suite = tmp_path / "suite"
+    shutil.copytree(EXAMPLE_SUITE, suite)
+    (suite / ".dockerignore").write_text("tasks\n")
+    assert tree_digest(suite_image_tree(suite, tmp_path / "copied")) == tree_digest(suite)
 
 
 def test_toolkit_build_refuses_a_missing_registry_file(env):
-    # An empty REGISTRY_FILE copies the whole build context to /opt/hb/registry.json, as a
-    # directory; the build's own check of what it copied is what fails.
+    # With or without BuildKit, an empty REGISTRY_FILE copies the whole build context to
+    # /opt/hb/registry.json, as a directory; the build's own check of what it copied is
+    # what fails. BuildKit prints the step's output on stderr, the classic builder on stdout.
     base = os.environ.get("HB_TEST_BASE_IMAGE", "python:3.12-slim")
-    proc = subprocess.run(["docker", "build", "--progress=plain", "--file", str(ROOT / "docker" / "toolkit.Dockerfile"),
+    proc = subprocess.run(["docker", "build", "--force-rm", "--file", str(ROOT / "docker" / "toolkit.Dockerfile"),
                            "--build-arg", f"BASE_IMAGE={base}", "--tag", "hb-test/toolkit-no-registry:latest",
                            str(ROOT)], capture_output=True, text=True, check=False)
+    output = proc.stdout + proc.stderr
     assert proc.returncode != 0
-    assert "IsADirectoryError" in proc.stderr and "/opt/hb/registry.json" in proc.stderr
+    assert "IsADirectoryError" in output and "/opt/hb/registry.json" in output

@@ -536,12 +536,19 @@ registry at `registry.json` must pass their schemas and plan (§6.2), and the
 repository may hold no `.gitattributes` file, so a checkout holds exactly the
 committed bytes. Every path a task names that a run reads must be there too (§7,
 Task layout): a run would not notice a missing `repo` directory but start every
-rep from an empty workspace. Those checks need packages from PyPI, which is why
-they run apart. The release job, which can push and attest, takes nothing from
-the first job and runs only this repository's code, with the runner's own Python
-and the standard library, pinned actions and images pinned by digest; the one
-exception is git, which the toolkit base installs from Debian's archive (see
-below). On a GitHub-hosted runner it:
+rep from an empty workspace. The suite directory is the suite image's build
+context, so it may hold no `.dockerignore` (or `.containerignore`) at its
+root: the classic Docker builder, Podman and Buildah would apply it there and
+leave files out (BuildKit gives `docker/suite.Dockerfile.dockerignore`, which
+has no patterns, precedence). Its paths must be portable: no name Windows
+reserves (a control character, one of `"*:<>?\|`, a trailing dot or space, a
+device name such as `NUL` or `con.txt`) and no two paths that differ only in
+case, so the suite tree can be rebuilt on Linux, macOS or Windows (below).
+Those checks need packages from PyPI, which is why they run apart. The release
+job, which can push and attest, takes nothing from the first job and runs only
+this repository's code, with the runner's own Python and the standard library,
+pinned actions and images pinned by digest; the one exception is git, which the
+toolkit base installs from Debian's archive (see below). On a GitHub-hosted runner it:
 
 1. names the images (`scripts/release.py names`) and checks that the
    version's tag does not exist yet;
@@ -589,10 +596,14 @@ Anyone with a GitHub login can repeat these checks from the tag.
 `scripts/release.py entry` computes the release table entry (§3.4) from the
 release commit's committed bytes alone, read with `git cat-file` so that no
 checkout filter or setting of the clone applies (`hb.release.release_entry_at`).
-It writes those bytes to a new directory and refuses the commit unless the
-directory then holds exactly the committed paths: on a case-insensitive file
-system (the default on macOS and Windows), two paths that differ only in case
-become one file, and the suite digest would not be the suite image's.
+It refuses a path with a name Windows reserves before writing anything (a
+backslash separates and a colon names a drive there, so such a path could be
+written outside the new directory, and a device name would receive the bytes),
+writes the bytes to a new directory, and refuses the commit
+unless the directory then holds exactly the committed paths: on a
+case-insensitive file system (the default on macOS and Windows), two paths that
+differ only in case become one file, and the suite digest would not be the
+suite image's. The release inputs check already refuses both kinds of path.
 `scripts/make_examples.py` builds the example entry with `release_entry`, the
 function `release_entry_at` calls.
 

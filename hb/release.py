@@ -120,6 +120,47 @@ def check_task_paths(task_id: str, task_dir: Path, task: dict) -> None:
             raise ReleaseError(f"task {task_id}: {rel} is not a {kind} in the task directory")
 
 
+# Names Windows reserves, as Python 3.13's ntpath.isreserved() has them (this
+# package also runs on 3.12): control characters, wildcards, separators, colon
+# and pipe; a trailing dot or space; and DOS device names, with any extension.
+_WINDOWS_RESERVED_CHARS = frozenset({chr(i) for i in range(32)} | set('"*:<>?|/\\'))
+_WINDOWS_DEVICE_NAMES = frozenset({"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+                                  | {f"{device}{n}" for device in ("COM", "LPT") for n in "123456789\u00b9\u00b2\u00b3"})
+
+
+def name_problem(name: str) -> str | None:
+    """Why Windows would not store this file or directory name as it is, or None."""
+    if name[-1:] in (".", " "):
+        return "it ends in a dot or a space"
+    if _WINDOWS_RESERVED_CHARS.intersection(name):
+        return 'it holds a control character or one of "*/:<>?\\|'
+    if name.partition(".")[0].rstrip(" ").upper() in _WINDOWS_DEVICE_NAMES:
+        return "it is a device name on Windows"
+    return None
+
+
+def check_portable_paths(paths: list[str]) -> None:
+    """Linux, macOS and Windows each store these paths as they are and keep them apart.
+
+    No name that Windows reserves (name_problem), and no two paths, or a path
+    and a directory, that differ only in case (one name on a case-insensitive
+    file system). So `scripts/release.py entry` can rebuild the suite tree on
+    a maintainer's machine running any of them.
+    """
+    seen = {}
+    for path in paths:
+        parts = path.split("/")
+        for part in parts:
+            problem = name_problem(part)
+            if problem:
+                raise ReleaseError(f"{path!r} is not a portable path: {problem}")
+        for depth in range(1, len(parts) + 1):
+            prefix = "/".join(parts[:depth])
+            other = seen.setdefault(prefix.casefold(), prefix)
+            if other != prefix:
+                raise ReleaseError(f"{other!r} and {prefix!r} differ only in case")
+
+
 def check_inputs(suite_dir: Path, registry_path: Path) -> dict:
     """Check the suite and registry a release would bake into its images.
 
@@ -136,6 +177,14 @@ def check_inputs(suite_dir: Path, registry_path: Path) -> dict:
         raise ReleaseError(f"{suite_dir}/suite.json is missing: the release suite is not in the repository")
     if not registry_path.is_file():
         raise ReleaseError(f"{registry_path} is missing: the release registry is not in the repository")
+    ignore_files = sorted(name for name in os.listdir(suite_dir)
+                          if name.casefold() in (".dockerignore", ".containerignore"))
+    if ignore_files:
+        # The suite directory is the suite image's build context. The classic Docker builder,
+        # Podman and Buildah read these at its root (case-insensitively on macOS and Windows);
+        # only BuildKit lets docker/suite.Dockerfile.dockerignore take precedence.
+        raise ReleaseError(f"{suite_dir}: {', '.join(ignore_files)} at the suite's root would leave files out "
+                           "of the suite image")
     suite = load_json(suite_dir / "suite.json", "suite.json")
     registry = load_json(registry_path, registry_path.name)
     try:
@@ -147,6 +196,7 @@ def check_inputs(suite_dir: Path, registry_path: Path) -> dict:
             validate("task", task)
             check_task_paths(task_id, suite_dir / "tasks" / task_id, task)
         digest = tree_digest(suite_dir)  # regular files only, printable paths
+        check_portable_paths([f["path"] for f in list_files(suite_dir, canonical_paths=False)])
         harness_ids = [harness["id"] for harness in registry["harnesses"]]
         for harness_id in harness_ids:
             entry_from_registry(registry, harness_id)  # refuses duplicate ids
@@ -267,9 +317,10 @@ class Git:
         """Write the committed bytes of every file under paths into dest, a new directory.
 
         Read with cat-file, so no checkout filter, line-ending conversion or
-        export attribute applies. Only regular files are allowed, and dest must
-        then hold exactly the committed paths, which a case-insensitive file
-        system does not when two of them differ only in case.
+        export attribute applies. Only regular files with portable paths are
+        allowed, checked before anything is written, and dest must then hold
+        exactly the committed paths, which a case-insensitive file system does
+        not when two of them differ only in case.
         """
         entries = self.tree(commit, paths)
         for path in paths:
@@ -279,6 +330,11 @@ class Git:
             parts = PurePosixPath(path).parts
             if mode not in REGULAR_MODES or not parts or ".." in parts or PurePosixPath(path).is_absolute():
                 raise ReleaseError(f"{path} at {commit} is not a regular file")
+            problems = [problem for problem in map(name_problem, parts) if problem]
+            if problems:
+                # On Windows a backslash separates and a colon names a drive, so such a path could be
+                # written outside dest, and a device name would receive the bytes.
+                raise ReleaseError(f"{path!r} at {commit} is not a portable path: {problems[0]}")
         blobs = self.raw("cat-file", "--batch", stdin="".join(f"{obj}\n" for _, obj, _ in entries).encode())
         offset = 0
         for _, obj, path in entries:

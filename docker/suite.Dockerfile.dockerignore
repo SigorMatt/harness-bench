@@ -1,2 +1,2 @@
-# No patterns, on purpose. This file takes precedence over any .dockerignore inside
-# the suite, so docker/suite.Dockerfile copies every file of the suite (spec §6.3).
+# No patterns, on purpose. With BuildKit this file takes precedence over a .dockerignore
+# at the suite's root, which scripts/release.py inputs refuses anyway (spec §6.3).
