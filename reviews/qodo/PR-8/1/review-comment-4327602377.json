@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4327602377",
+  "pull_request_review_id": 5588386917,
+  "id": 4327602377,
+  "node_id": "PRRC_kwDOVO0AUs8AAAABAfH4yQ",
+  "diff_hunk": "@@ -0,0 +1,180 @@\n+#!/usr/bin/env python3\n+\"\"\"Release steps (spec §6.3). Every command exits 0 on success, 1 when the release cannot go ahead.\n+\n+Run by .github/workflows/release.yml:\n+  inputs --version vX.Y.Z   (unprivileged job) check the version, the release suite and\n+                            registry against their schemas and plan; needs jsonschema\n+  names --version vX.Y.Z    (release job, standard library only) print the image names\n+                            and inputs as key=value lines for $GITHUB_OUTPUT\n+  pins --version ... --build-sha ... --toolkit-image ... --suite-image ... --out FILE\n+                            (release job, standard library only) write release-pins.json\n+\n+Run by a maintainer, in a full clone with the gh CLI logged in:\n+  pin release-pins.json     at the build commit: pin the release images in bench.yml\n+  verify [COMMIT]           check the release commit (default HEAD), then pull each\n+                            pinned image anonymously and verify its provenance\n+  entry [COMMIT]            print the release table entry for the release commit\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import argparse\n+import json\n+import os\n+import subprocess\n+import sys\n+import tempfile\n+from pathlib import Path, PurePosixPath\n+\n+ROOT = Path(__file__).resolve().parent.parent\n+sys.path.insert(0, str(ROOT))\n+\n+from hb.release import (  # noqa: E402\n+    BENCH_WORKFLOW, REGISTRY_FILE, SLUG, SUITE_DIR, TOOLKIT_REPOSITORY, Git, ReleaseError, load_json, parse_json,\n+    check_image, check_inputs, check_pins, check_release_commit, check_version, pin_workflow, read_pins_file,\n+    release_entry_at, suite_id_of, suite_repository, verify_commands,\n+)\n+\n+\n+def _names(root: Path, version: str) -> dict:\n+    \"\"\"The workflow's values, read with the standard library only.\"\"\"\n+    suite_id = suite_id_of(load_json(root / SUITE_DIR / \"suite.json\", f\"{SUITE_DIR}/suite.json\"))\n+    registry = load_json(root / REGISTRY_FILE, REGISTRY_FILE)\n+    harnesses = registry.get(\"harnesses\") if isinstance(registry, dict) else None\n+    first = harnesses[0].get(\"id\") if isinstance(harnesses, list) and harnesses and isinstance(harnesses[0], dict) \\\n+        else None\n+    if not isinstance(first, str) or not SLUG.fullmatch(first):\n+        raise ReleaseError(f\"{REGISTRY_FILE} lists no harness\")\n+    return {\"version\": check_version(version), \"toolkit\": TOOLKIT_REPOSITORY, \"suite\": suite_repository(suite_id),\n+            \"suite_dir\": SUITE_DIR, \"registry\": REGISTRY_FILE, \"harness\": first}\n+\n+\n+def _print_lines(values: dict) -> None:\n+    print(\"\\n\".join(f\"{key}={value}\" for key, value in values.items()))\n+\n+\n+def cmd_inputs(args) -> None:\n+    check_version(args.version)\n+    git = Git(args.root)\n+    attributes = [p for _, _, p in git.tree(\"HEAD\") if PurePosixPath(p).name == \".gitattributes\"]\n+    if attributes:\n+        raise ReleaseError(f\"{attributes}: a .gitattributes file can make a checkout differ from the committed files\")\n+    check_inputs(args.root / SUITE_DIR, args.root / REGISTRY_FILE)\n+    _print_lines(_names(args.root, args.version))\n+\n+\n+def cmd_names(args) -> None:\n+    _print_lines(_names(args.root, args.version))\n+\n+\n+def cmd_pins(args) -> None:\n+    pins = check_pins({\"version\": args.version, \"build_sha\": args.build_sha,  # what `pin` will accept\n+                       \"toolkit_image\": args.toolkit_image, \"suite_image\": args.suite_image})\n+    Path(args.out).write_text(json.dumps(pins, indent=2) + \"\\n\", encoding=\"utf-8\")\n+\n+\n+def cmd_pin(args) -> None:\n+    pins = read_pins_file(args.pins_file)\n+    git = Git(args.root)\n+    if git.head() != pins[\"build_sha\"]:\n+        raise ReleaseError(f\"HEAD is not the build commit: run git switch --detach {pins['build_sha']} first\")\n+    if not git.is_clean():\n+        raise ReleaseError(\"the working tree has uncommitted changes\")\n+    suite_id = suite_id_of(parse_json(git.text(\"HEAD\", f\"{SUITE_DIR}/suite.json\"), f\"{SUITE_DIR}/suite.json\"))\n+    check_image(pins[\"suite_image\"], suite_repository(suite_id))\n+    pinned = pin_workflow(git.text(\"HEAD\", BENCH_WORKFLOW), toolkit_image=pins[\"toolkit_image\"],\n+                          suite_image=pins[\"suite_image\"])\n+    (args.root / BENCH_WORKFLOW).write_text(pinned, encoding=\"utf-8\")",
+  "path": "scripts/release.py",
+  "commit_id": "a92b31f16bbb19213904616ac3d219ba2a9071d6",
+  "original_commit_id": "a92b31f16bbb19213904616ac3d219ba2a9071d6",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n2\\. Windows pinning can fail verification <code>🐞 Bug</code> <code>☼ Reliability</code>\n\n<pre>\n<b><i>cmd_pin</i></b> writes the complete workflow using <b><i>Path.write_text</i></b>, which translates line endings on\nWindows rather than preserving the committed bytes of lines it did not change. In a clone without\nGit line-ending normalization, the resulting commit changes every line to CRLF and\n<b><i>check_release_commit</i></b> rejects it because its content is not the parent workflow with only two pins\nsubstituted.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe maintainer’s `pin` command can translate the whole workflow to CRLF on Windows, causing its release commit to fail the two-line-only verification.\n## Fix Focus Areas\n- scripts/release.py[83-87]\n- hb/release.py[303-306]\n## Recommended Fix\nWrite the pinned workflow as UTF-8 bytes, or open it with newline translation disabled, so every unchanged byte remains identical to the committed workflow. Add a test covering the byte-preservation requirement.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/f50b01cd-1fdb-4ea9-b0a4-afde276e0da6?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/f50b01cd-1fdb-4ea9-b0a4-afde276e0da6)",
+  "created_at": "2026-10-20T16:41:20Z",
+  "updated_at": "2026-10-20T16:41:20Z",
+  "html_url": "https://github.com/SigorMatt/harness-bench/pull/8#discussion_r4327602377",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/8",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4327602377"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/harness-bench/pull/8#discussion_r4327602377"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/8"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4327602377/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 85,
+  "original_start_line": 85,
+  "start_side": "RIGHT",
+  "line": 87,
+  "original_line": 87,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 87,
+  "position": 87,
+  "subject_type": "line"
+}
