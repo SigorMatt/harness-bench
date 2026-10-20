@@ -211,6 +211,21 @@ def test_inputs_no_run_could_use_are_refused(repo, break_it, message):
         release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
 
 
+@pytest.mark.parametrize("break_it,message", [
+    # Nothing at run time notices a missing repo: every rep would start with an empty workspace.
+    (lambda task: shutil.rmtree(task / "repo"), "repo is not a directory"),
+    (lambda task: shutil.rmtree(task / "repo") or (task / "repo").write_text(""), "repo is not a directory"),
+    (lambda task: (task / "instruction.md").unlink(), "instruction.md is not a file"),
+    (lambda task: (task / "probes" / "probe.py").unlink(), "probes/probe.py is not a file"),
+    (lambda task: (task / "checks" / "target.json").unlink() or (task / "checks" / "target.json").mkdir(),
+     "checks/target.json is not a file"),
+])
+def test_inputs_refuse_a_task_path_a_run_reads_that_is_not_there(repo, break_it, message):
+    break_it(next((repo / release.SUITE_DIR / "tasks").iterdir()))
+    with pytest.raises(ReleaseError, match=message):
+        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+
+
 def test_inputs_command_prints_the_workflow_outputs(repo):
     proc = cli(repo, "inputs", "--version", "v0.1.0")
     assert proc.returncode == 0, proc.stderr

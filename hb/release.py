@@ -104,6 +104,22 @@ def suite_id_of(suite) -> str:
     return suite_id
 
 
+def check_task_paths(task_id: str, task_dir: Path, task: dict) -> None:
+    """Every path of a task that a run reads is there, a directory for the repo and files for the rest.
+
+    A missing instruction, probe or check fails the task job; a missing repo
+    would not: hb.tree.materialize copies what it finds, so every rep would
+    start with an empty workspace.
+    """
+    wanted = [(task["repo"], "directory")] + [(rel, "file") for rel in (
+        task["instruction"], task["probe"]["program"], task["probe"]["inputs"],
+        task["checks"]["target"], task["checks"]["preservation"])]
+    for rel, kind in wanted:
+        path = task_dir / rel
+        if not (path.is_dir() if kind == "directory" else path.is_file()):
+            raise ReleaseError(f"task {task_id}: {rel} is not a {kind} in the task directory")
+
+
 def check_inputs(suite_dir: Path, registry_path: Path) -> dict:
     """Check the suite and registry a release would bake into its images.
 
@@ -127,7 +143,9 @@ def check_inputs(suite_dir: Path, registry_path: Path) -> dict:
         validate("registry", registry)
         plan = plan_run(suite_dir)  # task ids, every task.json, probe timeouts, fits in a hosted job
         for task_id in plan["tasks"]:
-            validate("task", load_json(suite_dir / "tasks" / task_id / "task.json", f"task {task_id}"))
+            task = load_json(suite_dir / "tasks" / task_id / "task.json", f"task {task_id}")
+            validate("task", task)
+            check_task_paths(task_id, suite_dir / "tasks" / task_id, task)
         digest = tree_digest(suite_dir)  # regular files only, printable paths
         harness_ids = [harness["id"] for harness in registry["harnesses"]]
         for harness_id in harness_ids:

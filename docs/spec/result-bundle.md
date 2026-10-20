@@ -534,12 +534,14 @@ first job, with no write permission, checks the release inputs
 (`scripts/release.py inputs`): the suite at `suites/py-maint/` and the
 registry at `registry.json` must pass their schemas and plan (§6.2), and the
 repository may hold no `.gitattributes` file, so a checkout holds exactly the
-committed bytes. Those checks need packages from PyPI, which is why they run
-apart. The release job, which can push and attest, takes nothing from the first
-job and runs only this repository's code, with the runner's own Python and the
-standard library, pinned actions and images pinned by digest; the one exception
-is git, which the toolkit base installs from Debian's archive (see below). On a
-GitHub-hosted runner it:
+committed bytes. Every path a task names that a run reads must be there too (§7,
+Task layout): a run would not notice a missing `repo` directory but start every
+rep from an empty workspace. Those checks need packages from PyPI, which is why
+they run apart. The release job, which can push and attest, takes nothing from
+the first job and runs only this repository's code, with the runner's own Python
+and the standard library, pinned actions and images pinned by digest; the one
+exception is git, which the toolkit base installs from Debian's archive (see
+below). On a GitHub-hosted runner it:
 
 1. names the images (`scripts/release.py names`) and checks that the
    version's tag does not exist yet;
