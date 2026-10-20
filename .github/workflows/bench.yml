@@ -1,5 +1,6 @@
-# Reusable benchmark workflow. Every step it runs exists; the image pins below are
-# placeholders until the first release builds and publishes the images.
+# Reusable benchmark workflow. On main the image pins below are placeholders, so
+# a caller pinned to a branch fails at its first step. A release commit, which
+# exists only as a tag, pins the images the release workflow built (spec §6.3).
 #
 # Submitters call it from their own public repository, pinned to a release commit:
 #   uses: SigorMatt/harness-bench/.github/workflows/bench.yml@<release-commit-sha>
@@ -29,7 +30,8 @@ permissions:
   attestations: write  # storing attestations in the caller's repository
 
 env:
-  # Release pins. Changing any of these is a new release (and a new signer commit).
+  # Release pins. Changing any of these is a new release (and a new signer commit);
+  # scripts/release.py pin rewrites exactly these two lines.
   HB_TOOLKIT_IMAGE: ghcr.io/sigormatt/hb-toolkit@sha256:0000000000000000000000000000000000000000000000000000000000000000
   HB_SUITE_IMAGE: ghcr.io/sigormatt/hb-suite-py-maint@sha256:0000000000000000000000000000000000000000000000000000000000000000
 

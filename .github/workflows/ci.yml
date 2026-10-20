@@ -2,6 +2,10 @@ name: ci
 
 on:
   push:
+    # Branches only. A release tag's commit pins real images in bench.yml, which
+    # main never does (tests/test_release.py checks main's placeholders); a
+    # release commit is checked by scripts/release.py verify instead (spec §6.3).
+    branches: ["**"]
   pull_request:
 
 permissions:

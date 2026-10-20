@@ -34,7 +34,7 @@ bounds it (§10) instead of adding detection.
 | | Invariant | How it holds |
 |---|---|---|
 | I1 | Every accepted artifact was produced by the official workflow at a release commit, on a GitHub-hosted runner, in the submitter's public repository. | GitHub artifact attestations, verified with `gh attestation verify --repo <submitter> --signer-workflow <official> --signer-digest <release sha> --deny-self-hosted-runners`. |
-| I2 | Model, endpoint, suite, budgets, limits and the harness are fixed by the release. | The reusable workflow pins the toolkit and suite images by digest. Its only input is a harness id, looked up in the registry baked into the toolkit image, which pins each harness image by digest. |
+| I2 | Model, endpoint, suite, budgets, limits and the harness are fixed by the release. | The reusable workflow pins the toolkit and suite images by digest. Its only input is a harness id, looked up in the registry baked into the toolkit image, which pins each harness image by digest. Both images are built and attested by the release workflow from the parent of the release commit, which differs from it only in those two pins (§6.3). |
 | I3 | Every model request is served by the pinned model. | The gateway has exactly one upstream and overwrites the request's `model` field. The harness has no other network route (I4). |
 | I4 | The harness holds no authority beyond its workspace. | Container profile (§6): internal-only network shared with the gateway alone, placeholder API key, no Docker socket, read-only root, no capabilities, non-root user, fixed CPU, memory and process limits. |
 | I5 | The harness cannot write trusted records. | The gateway log lives on a volume that is never mounted into the harness container, and the lifecycle record is written by the toolkit, in no container the harness can reach. Bundles are assembled after the harness container has stopped. |
@@ -104,8 +104,9 @@ For each release commit, maintainers compute `releases/<sha>.json` in the
 results repository ([`schemas/release.schema.json`](../../schemas/release.schema.json)):
 the signer workflow and commit, the toolkit and suite images, and the cohort
 IDs, entry IDs and task IDs that release can produce. Because cohort and entry
-are projections of pinned files, this set is known before any run happens.
-Acceptance is membership.
+are projections of pinned files, this set is known before any run happens:
+`scripts/release.py entry` computes it from the release commit's committed
+bytes alone (§6.3). Acceptance is membership.
 
 ### 3.5 Leaderboard cells
 
@@ -520,6 +521,99 @@ and seal all refuse one before doing anything: after GitHub's "re-run failed
 jobs" or "re-run all jobs", no tokens are spent on a run that could not
 count. Start a new run instead.
 
+### 6.3 Releases
+
+A release is what a submitter pins: one commit of this repository, the release
+commit, whose `bench.yml` pins a toolkit image and a suite image by digest
+(I2). Results are accepted only from the release commits in the release table
+(§3.4).
+
+**Images.** `.github/workflows/release.yml` runs when a maintainer starts it,
+from main only, with the version (`vMAJOR.MINOR.PATCH`) as its one input. A
+first job, with no write permission, checks the release inputs
+(`scripts/release.py inputs`): the suite at `suites/py-maint/` and the
+registry at `registry.json` must pass their schemas and plan (§6.2), and the
+repository may hold no `.gitattributes` file, so a checkout holds exactly the
+committed bytes. Every path a task names that a run reads must be there too (§7,
+Task layout): a run would not notice a missing `repo` directory but start every
+rep from an empty workspace. Those checks need packages from PyPI, which is why
+they run apart. The release job, which can push and attest, takes nothing from
+the first job and runs only this repository's code, with the runner's own Python
+and the standard library, pinned actions and images pinned by digest; the one
+exception is git, which the toolkit base installs from Debian's archive (see
+below). On a GitHub-hosted runner it:
+
+1. names the images (`scripts/release.py names`) and checks that the
+   version's tag does not exist yet;
+2. builds the toolkit image (`docker/toolkit.Dockerfile`: `hb/`, `schemas/` and
+   the registry) on `docker/toolkit-base.Dockerfile`, whose Python and docker
+   CLI images are pinned by digest, and the suite image
+   (`docker/suite.Dockerfile`: the suite directory is the build context and is
+   copied to `/suite`, with nothing else);
+3. checks them as `bench.yml` uses them: `/suite` copied out of a created
+   container is identical to the suite directory, the toolkit's registry is
+   identical to `registry.json`, and plan succeeds in the toolkit image with no
+   network;
+4. pushes both to GHCR, and pulls each back by the digest the push recorded;
+5. attests both with build provenance, stored in GHCR and in GitHub, which
+   names the commit they were built from (the build commit) and
+   `refs/heads/main`;
+6. uploads `release-pins.json`: the version, the build commit and both image
+   references.
+
+**The release commit.** A workflow's own token cannot change workflow files,
+so a maintainer makes the release commit, in a full clone at the build commit:
+`scripts/release.py pin release-pins.json` rewrites the two pin lines of
+`bench.yml` and nothing else, and `git commit` records it. The release commit
+therefore has exactly one parent, the build commit, and differs from it only in
+those two lines, which neither image contains: the code at the release commit
+is the code its images were built from.
+
+Before the tag is pushed, `scripts/release.py verify` checks the commit with
+git plumbing whose NUL-separated output no name, quoting, submodule or filter
+setting changes, and with replace refs off: one parent; one changed path,
+`bench.yml`, with its file mode unchanged; only the two pin lines changed; both
+pins in this release's image repositories; no `.gitattributes` file. Then it
+runs:
+
+- `docker pull` of each pinned image with an empty Docker configuration
+  against the current Docker context's daemon. The pull is anonymous, so it
+  succeeds only for a public image (GHCR packages start private: a maintainer
+  makes both public once, after the first release workflow run);
+- `gh attestation verify oci://<image> --repo SigorMatt/harness-bench
+  --signer-workflow SigorMatt/harness-bench/.github/workflows/release.yml
+  --source-digest <build commit> --source-ref refs/heads/main
+  --deny-self-hosted-runners` for each, which needs a GitHub login.
+
+Anyone with a GitHub login can repeat these checks from the tag.
+`scripts/release.py entry` computes the release table entry (§3.4) from the
+release commit's committed bytes alone, read with `git cat-file` so that no
+checkout filter or setting of the clone applies (`hb.release.release_entry_at`).
+It writes those bytes to a new directory and refuses the commit unless the
+directory then holds exactly the committed paths: on a case-insensitive file
+system (the default on macOS and Windows), two paths that differ only in case
+become one file, and the suite digest would not be the suite image's.
+`scripts/make_examples.py` builds the example entry with `release_entry`, the
+function `release_entry_at` calls.
+
+**Tag only.** The release commit is pushed as the tag `vMAJOR.MINOR.PATCH` and
+never merged into main, whose pins stay placeholders: a caller that pins
+`bench.yml` to a branch instead of a release commit fails at its first step
+rather than spending tokens on a run acceptance would refuse. The tag is the
+only ref that keeps the release commit reachable, so the repository has a
+ruleset, set up once before the first release, that blocks deleting or moving
+`v*` tags: a deleted tag could let the commit be garbage-collected, and every
+caller's `@<sha>` with it. A clone that does not
+have the tag yet fetches it with `git fetch origin tag vMAJOR.MINOR.PATCH`,
+since a plain fetch brings no tag whose commit is on no fetched branch. CI runs
+on branches only (main's pins are placeholders, which a test checks), so a
+release tag does not start it.
+
+Neither image is bit-for-bit reproducible: images record build timestamps, and
+the toolkit base installs git from Debian's archive at build time. That does not
+weaken a release: `bench.yml` pins the images the release workflow built and
+attested, by digest, not a recipe for building them.
+
 ## 7. Grading
 
 The same function, `hb.grade.grade_rep`, runs inside the run (advisory) and at
@@ -719,4 +813,5 @@ cohort.
 | `hb/grade.py` | observation comparison, verdict, probe runner contract, `grade_rep` |
 | `hb/metrics.py` | usage and cost from gateway records |
 | `hb/accept.py` | expected files, attestation commands, run acceptance, attempt rules, dedup key |
+| `hb/release.py` | releases: the release inputs, `bench.yml`'s pins, the release commit's checks, the release table entry (`scripts/release.py`, `.github/workflows/release.yml`) |
 | `hb/schemas.py` | schema loading and validation |

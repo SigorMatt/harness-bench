@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4327602354",
+  "pull_request_review_id": 5588386917,
+  "id": 4327602354,
+  "node_id": "PRRC_kwDOVO0AUs8AAAABAfH4sg",
+  "diff_hunk": "@@ -0,0 +1,343 @@\n+\"\"\"Releases: two images built from one commit, and one commit that pins them.\n+\n+A release (spec §6.3) is:\n+\n+- the toolkit image (hb/, schemas/ and the harness registry) and the suite\n+  image (the suite tree at /suite), built by .github/workflows/release.yml from\n+  one commit of main, the build commit, on a GitHub-hosted runner, pushed to\n+  GHCR and given build-provenance attestations;\n+- the release commit: a child of the build commit whose only change is the two\n+  image pins in bench.yml, pushed as the tag vMAJOR.MINOR.PATCH and never\n+  merged into main. A workflow's own token cannot change workflow files, so a\n+  maintainer makes it (`scripts/release.py pin`).\n+\n+The release commit and the build commit differ only in bench.yml, which neither\n+image contains, so the code at the release commit is the code in its images.\n+check_release_commit() and verify_commands() check that before the tag is\n+pushed. release_entry_at() computes the release table entry (spec §3.4) from the\n+release commit's committed bytes alone.\n+\n+Only check_inputs() needs jsonschema, and imports it itself: the privileged\n+release job runs the rest with the standard library only.\n+\"\"\"\n+\n+from __future__ import annotations\n+\n+import json\n+import os\n+import re\n+import subprocess\n+from pathlib import Path, PurePosixPath\n+\n+from .identity import cohort_from_suite, cohort_id, entry_from_registry, entry_id\n+from .manifest import VerificationError, tree_digest\n+from .plan import PlanError, plan_run\n+\n+REPOSITORY = \"SigorMatt/harness-bench\"\n+SIGNER_WORKFLOW = f\"{REPOSITORY}/.github/workflows/bench.yml\"\n+RELEASE_WORKFLOW = f\"{REPOSITORY}/.github/workflows/release.yml\"\n+BUILD_REF = \"refs/heads/main\"         # release.yml builds only from main\n+BENCH_WORKFLOW = \".github/workflows/bench.yml\"\n+SUITE_DIR = \"suites/py-maint\"         # what the suite image holds at /suite\n+REGISTRY_FILE = \"registry.json\"       # what the toolkit image holds as its registry\n+IMAGE_PREFIX = \"ghcr.io/sigormatt/\"\n+TOOLKIT_REPOSITORY = IMAGE_PREFIX + \"hb-toolkit\"\n+SUITE_REPOSITORY_PREFIX = IMAGE_PREFIX + \"hb-suite-\"\n+PLACEHOLDER_DIGEST = \"sha256:\" + \"0\" * 64\n+PINS_FILE_KEYS = (\"version\", \"build_sha\", \"toolkit_image\", \"suite_image\")\n+REGULAR_MODES = (\"100644\", \"100755\")\n+\n+VERSION = re.compile(r\"v(0|[1-9][0-9]{0,5})\\.(0|[1-9][0-9]{0,5})\\.(0|[1-9][0-9]{0,5})\")\n+GIT_SHA = re.compile(r\"[0-9a-f]{40}\")\n+DIGEST = re.compile(r\"sha256:[0-9a-f]{64}\")\n+SLUG = re.compile(r\"[a-z0-9][a-z0-9-]{0,62}\")\n+_PIN_LINE = re.compile(r\"^  (HB_TOOLKIT_IMAGE|HB_SUITE_IMAGE): (\\S+)$\", re.MULTILINE)\n+_PIN_KEYS = {\"HB_TOOLKIT_IMAGE\": \"toolkit_image\", \"HB_SUITE_IMAGE\": \"suite_image\"}\n+# Replace refs (refs/replace/*) would let a local object stand in for a commit or a blob.\n+_GIT_ENV = {\"GIT_NO_REPLACE_OBJECTS\": \"1\"}\n+\n+\n+class ReleaseError(Exception):\n+    \"\"\"The release cannot go ahead as it is.\"\"\"\n+\n+\n+def check_version(version: str) -> str:\n+    if not isinstance(version, str) or not VERSION.fullmatch(version):\n+        raise ReleaseError(f\"version {version!r} is not vMAJOR.MINOR.PATCH\")\n+    return version\n+\n+\n+def suite_repository(suite_id: str) -> str:\n+    return SUITE_REPOSITORY_PREFIX + suite_id\n+\n+\n+def check_image(ref: str, repository: str) -> str:\n+    \"\"\"ref must be repository@sha256:<64 hex>, and not the placeholder digest.\"\"\"\n+    name, _, digest = ref.partition(\"@\") if isinstance(ref, str) else (\"\", \"\", \"\")\n+    if name != repository or not DIGEST.fullmatch(digest):\n+        raise ReleaseError(f\"{ref!r} is not {repository} pinned by digest\")\n+    if digest == PLACEHOLDER_DIGEST:\n+        raise ReleaseError(f\"{ref!r} is the placeholder digest, not a released image\")\n+    return ref\n+\n+\n+def parse_json(text, what: str):\n+    try:\n+        return json.loads(text)\n+    except ValueError as exc:\n+        raise ReleaseError(f\"{what}: cannot be read as JSON ({exc})\") from None\n+\n+\n+def load_json(path: Path, what: str):\n+    try:\n+        text = Path(path).read_text(encoding=\"utf-8\")\n+    except (OSError, ValueError) as exc:\n+        raise ReleaseError(f\"{what}: cannot be read ({exc})\") from None\n+    return parse_json(text, what)\n+\n+\n+def suite_id_of(suite) -> str:\n+    \"\"\"The suite's id, which names its image. Raises ReleaseError for anything but a slug.\"\"\"\n+    suite_id = suite.get(\"id\") if isinstance(suite, dict) else None\n+    if not isinstance(suite_id, str) or not SLUG.fullmatch(suite_id):\n+        raise ReleaseError(\"suite.json has no valid id\")\n+    return suite_id\n+\n+\n+def check_inputs(suite_dir: Path, registry_path: Path) -> dict:\n+    \"\"\"Check the suite and registry a release would bake into its images.\n+\n+    Returns the suite id, the registry's harness ids, and the suite tree digest.\n+    Raises ReleaseError, so a release with inputs no run could use stops before\n+    anything is built.\n+    \"\"\"\n+    from jsonschema import ValidationError  # only here: see the module docstring\n+\n+    from .schemas import validate\n+\n+    suite_dir, registry_path = Path(suite_dir), Path(registry_path)\n+    if not (suite_dir / \"suite.json\").is_file():\n+        raise ReleaseError(f\"{suite_dir}/suite.json is missing: the release suite is not in the repository\")\n+    if not registry_path.is_file():\n+        raise ReleaseError(f\"{registry_path} is missing: the release registry is not in the repository\")\n+    suite = load_json(suite_dir / \"suite.json\", \"suite.json\")\n+    registry = load_json(registry_path, registry_path.name)\n+    try:\n+        validate(\"suite\", suite)\n+        validate(\"registry\", registry)\n+        plan = plan_run(suite_dir)  # task ids, every task.json, probe timeouts, fits in a hosted job\n+        for task_id in plan[\"tasks\"]:\n+            validate(\"task\", load_json(suite_dir / \"tasks\" / task_id / \"task.json\", f\"task {task_id}\"))",
+  "path": "hb/release.py",
+  "commit_id": "a92b31f16bbb19213904616ac3d219ba2a9071d6",
+  "original_commit_id": "a92b31f16bbb19213904616ac3d219ba2a9071d6",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n1\\. A release can contain an empty task workspace <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>check_inputs</i></b> validates each task document and runs <b><i>plan_run</i></b>, but neither checks that the task’s\nreferenced <b><i>repo</i></b> directory exists. If that directory is missing, <b><i>materialize</i></b> creates an empty\nworkspace without error, so the release can publish a task whose runs use an empty repository.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nRelease input validation accepts a task whose `repo` directory is absent; runtime silently materializes an empty workspace.\n## Fix Focus Areas\n- hb/release.py[128-131]\n## Recommended Fix\nAfter validating each task document, resolve its `repo` path beneath the task directory and reject it unless it is an existing directory. Add a release-input test for a missing task workspace.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/bb16f088-fc93-4fba-863e-daaa55d0f722?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/bb16f088-fc93-4fba-863e-daaa55d0f722)",
+  "created_at": "2026-10-20T16:41:20Z",
+  "updated_at": "2026-10-20T16:41:20Z",
+  "html_url": "https://github.com/SigorMatt/harness-bench/pull/8#discussion_r4327602354",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/8",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4327602354"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/harness-bench/pull/8#discussion_r4327602354"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/8"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4327602354/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 128,
+  "original_start_line": 128,
+  "start_side": "RIGHT",
+  "line": 130,
+  "original_line": 130,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 130,
+  "position": 130,
+  "subject_type": "line"
+}
