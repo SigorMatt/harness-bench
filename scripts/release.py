@@ -84,7 +84,8 @@ def cmd_pin(args) -> None:
     check_image(pins["suite_image"], suite_repository(suite_id))
     pinned = pin_workflow(git.text("HEAD", BENCH_WORKFLOW), toolkit_image=pins["toolkit_image"],
                           suite_image=pins["suite_image"])
-    (args.root / BENCH_WORKFLOW).write_text(pinned, encoding="utf-8")
+    # Bytes, not text: text mode on Windows would end every line in "\r\n", which verify refuses.
+    (args.root / BENCH_WORKFLOW).write_bytes(pinned.encode("utf-8"))
     version = pins["version"]
     print(f"{BENCH_WORKFLOW} now pins the images of {version}. Next:\n"
           f"  git commit --all --message 'Release {version}'\n"

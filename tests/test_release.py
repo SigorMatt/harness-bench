@@ -29,6 +29,18 @@ PLACEHOLDER_BENCH = re.sub(r"^(  HB_(?:TOOLKIT|SUITE)_IMAGE: [^@\s]+@)sha256:[0-
                            lambda m: m.group(1) + release.PLACEHOLDER_DIGEST, BENCH.read_text(), flags=re.MULTILINE)
 NO_JSONSCHEMA = ("import runpy, sys; sys.modules['jsonschema'] = sys.modules['referencing'] = None; "
                  "sys.argv = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')")
+# Text mode as on Windows, where a file written with newline=None gets os.linesep, "\r\n", for each "\n".
+WINDOWS_TEXT = """
+import builtins, io, runpy, sys
+open_ = io.open
+def windows_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None, *args, **kwargs):
+    if newline is None and "b" not in mode and set(mode) & set("wax"):
+        newline = "\\r\\n"
+    return open_(file, mode, buffering, encoding, errors, newline, *args, **kwargs)
+io.open = builtins.open = windows_open
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
 
 
 def git(repo: Path, *args: str) -> str:
@@ -37,9 +49,11 @@ def git(repo: Path, *args: str) -> str:
                           text=True).stdout.strip()
 
 
-def cli(repo: Path, *args: str, env=None, stdlib_only=False) -> subprocess.CompletedProcess:
-    """scripts/release.py; with stdlib_only, importing jsonschema or referencing fails, as in the release job."""
-    prefix = [sys.executable, "-c", NO_JSONSCHEMA] if stdlib_only else [sys.executable]
+def cli(repo: Path, *args: str, env=None, stdlib_only=False, windows=False) -> subprocess.CompletedProcess:
+    """scripts/release.py; with stdlib_only, importing jsonschema or referencing fails, as in the release job;
+    with windows, text files are written as on Windows."""
+    prelude = NO_JSONSCHEMA if stdlib_only else WINDOWS_TEXT if windows else None
+    prefix = [sys.executable, "-c", prelude] if prelude else [sys.executable]
     return subprocess.run([*prefix, str(ROOT / "scripts" / "release.py"), "--root", str(repo), *args],
                           env=env or GIT_ENV, capture_output=True, text=True, check=False)
 
@@ -263,6 +277,20 @@ def test_pin_then_verify_offline(repo):
     proc = cli(repo, "verify", "--offline")
     assert proc.returncode == 0, proc.stderr
     assert f"the build commit {build}" in proc.stdout
+
+
+def test_pin_keeps_every_other_byte_where_text_mode_writes_crlf(repo):
+    # Written as text on Windows, every line would end in "\r\n", and a clone that commits files as they are
+    # (core.autocrlf false or unset) would record that: verify refuses such a commit.
+    git(repo, "config", "core.autocrlf", "false")
+    build = (repo / release.BENCH_WORKFLOW).read_bytes()
+    proc = cli(repo, "pin", str(pins_file(repo)), windows=True)
+    assert proc.returncode == 0, proc.stderr
+    assert (repo / release.BENCH_WORKFLOW).read_bytes() == release.pin_workflow(
+        build.decode(), toolkit_image=TOOLKIT_REF, suite_image=SUITE_REF).encode()
+    git(repo, "commit", "--quiet", "--all", "--message", "Release v0.1.0")
+    proc = cli(repo, "verify", "--offline")
+    assert proc.returncode == 0, proc.stderr
 
 
 def test_pin_needs_the_build_commit_checked_out_and_clean(repo):
