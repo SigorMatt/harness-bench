@@ -17,8 +17,9 @@
       "const": "hb/harness/1"
     },
     "id": {
-      "description": "The name of the adapter directory.",
-      "$ref": "urn:hb:schema:common:1#/$defs/slug"
+      "description": "The name of the adapter directory. It also ends the image repository name, so it cannot end in '-'.",
+      "$ref": "urn:hb:schema:common:1#/$defs/slug",
+      "pattern": "[a-z0-9]$"
     },
     "version": {
       "description": "The harness version the image pins.",

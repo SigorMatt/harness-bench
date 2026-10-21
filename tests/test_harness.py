@@ -126,10 +126,19 @@ def test_the_schema_has_the_same_rules(tmp_path):
         harness.check_inputs(tmp_path / "harnesses" / "missing", "missing")
 
 
-@pytest.mark.parametrize("bad_id", ["Base", "../x", "", "a b", None])
+@pytest.mark.parametrize("bad_id", ["Base", "../x", "", "a b", None, "foo-"])
 def test_harness_ids_are_slugs(bad_id):
     with pytest.raises(ReleaseError):
         harness.adapter_path(bad_id)
+
+
+def test_the_schema_refuses_an_id_ending_in_a_hyphen():
+    from jsonschema import ValidationError
+    from hb.schemas import validate
+    document = json.loads((BASELINE / "harness.json").read_text())
+    validate("harness", {**document, "id": "foo--bar"})
+    with pytest.raises(ValidationError):
+        validate("harness", {**document, "id": "foo-"})
 
 
 def test_image_tags_name_the_version_and_the_build():

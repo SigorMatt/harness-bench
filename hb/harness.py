@@ -53,6 +53,8 @@ ARGUMENT = re.compile(r"[\x21-\x7e]+")
 def check_harness_id(harness_id) -> str:
     if not isinstance(harness_id, str) or not SLUG.fullmatch(harness_id):
         raise ReleaseError(f"harness id {harness_id!r} is not a slug")
+    if harness_id.endswith("-"):  # it ends an image repository name, which cannot end in a separator
+        raise ReleaseError(f"harness id {harness_id!r} ends in '-'")
     return harness_id
 
 
