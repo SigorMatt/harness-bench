@@ -183,6 +183,15 @@ def test_symlinks_in_the_copied_image_are_refused(tmp_path):
         harness.check_image_files(BASELINE, nested, good_harness(entrypoint=["/hb/bin/run"]))
 
 
+@pytest.mark.parametrize("argument", ["/hb/../inspect.json", "/hb//etc/passwd", "/hb/./agent.py", "/hb/config/",
+                                      "/hb/"])
+def test_entrypoint_files_outside_the_copied_image_are_refused(tmp_path, argument):
+    # The image job keeps its inspect.json next to the copied /hb, and /etc/passwd is the host's.
+    (tmp_path / "inspect.json").write_text("[]")
+    with pytest.raises(ReleaseError, match="as a regular file"):
+        harness.check_image_files(BASELINE, copied_hb(tmp_path), good_harness(entrypoint=["python3", argument]))
+
+
 def test_an_image_labelled_with_its_id_and_without_an_entrypoint():
     harness.check_image_config(inspect_of(), "baseline")
     harness.check_image_config(inspect_of(entrypoint=[]), "baseline")

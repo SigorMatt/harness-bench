@@ -146,7 +146,12 @@ def check_image_config(inspect, harness_id: str) -> None:
 
 
 def _regular_file_under(root: Path, rel: str) -> bool:
-    """root/rel is a regular file reached through real directories: no component is a symlink."""
+    """root/rel is a regular file reached through real directories: no component is a symlink.
+
+    rel must stay under root: an empty, '.' or '..' component, or a leading '/', is refused.
+    """
+    if any(part in ("", ".", "..") for part in rel.split("/")):
+        return False
     path = Path(root)
     parts = PurePosixPath(rel).parts
     for depth, part in enumerate(parts, 1):
