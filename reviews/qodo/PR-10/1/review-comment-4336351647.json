@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4336351647",
+  "pull_request_review_id": 5599109253,
+  "id": 4336351647,
+  "node_id": "PRRC_kwDOVO0AUs8AAAABAnd5nw",
+  "diff_hunk": "@@ -126,18 +201,21 @@ jobs:\n         run: |\n           # The suite image holds exactly the suite tree, and the toolkit exactly the registry.\n           cid=$(docker create \"$SUITE:$VERSION\" /bin/true)\n-          docker cp \"$cid:/suite\" \"$RUNNER_TEMP/suite\"\n+          docker cp --follow-link \"$cid:/suite\" \"$RUNNER_TEMP/suite\"  # a symlink at /suite resolves inside the image\n           docker rm \"$cid\"\n           diff --recursive --no-dereference \"$SUITE_DIR\" \"$RUNNER_TEMP/suite\"\n-          docker run --rm --network none --entrypoint cat \"$TOOLKIT:$VERSION\" /opt/hb/registry.json | cmp - \"$REGISTRY_FILE\"\n+          # The image runs here only sandboxed: no network, no capabilities, a read-only root,\n+          # and nothing from this job's environment but the two variables plan needs.\n+          sandbox=(--rm --network none --cap-drop ALL --security-opt no-new-privileges --read-only)\n+          docker run \"${sandbox[@]}\" --entrypoint cat \"$TOOLKIT:$VERSION\" /opt/hb/registry.json | cmp - \"$REGISTRY_FILE\"\n           # Plan the run exactly as bench.yml's first job does.\n           mkdir -p \"$RUNNER_TEMP/plan\"\n-          docker run --rm --network none \\\n+          docker run \"${sandbox[@]}\" \\\n             --mount \"type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly\" \\\n             --mount \"type=bind,src=$RUNNER_TEMP/plan,dst=/out\" \\\n             --env HARNESS_ID --env HB_RUN_ATTEMPT \\",
+  "path": ".github/workflows/release.yml",
+  "commit_id": "2147adfe0ce2671712236707f4a26e3e0654c369",
+  "original_commit_id": "2147adfe0ce2671712236707f4a26e3e0654c369",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/High-634FD1?style=flat-square\" height=\"20px\" alt=\"Action required\">\n\n1\\. Release check cannot write the plan output <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\nThe release workflow applies <b><i>--cap-drop ALL</i></b> to the toolkit’s root-run <b><i>plan</i></b> command, removing\n<b><i>CAP_DAC_OVERRIDE</i></b> while <b><i>/out</i></b> points to a runner-owned directory. When <b><i>$RUNNER_TEMP/plan</i></b> has\nmode 0755, <b><i>plan</i></b> cannot write its output files and the images job stops before publishing, unlike\nthe corresponding plan step in bench.yml.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe release images job drops all capabilities from the toolkit’s root-run `plan` container. It then cannot write its output files into the runner-owned `$RUNNER_TEMP/plan` bind mount when that directory has mode 0755, stopping the job before publishing.\n\n## Fix Focus Areas\n- .github/workflows/release.yml[209-218]\n\n## Recommended Fix\nKeep the sandbox restrictions, but give the container write access to the output directory without restoring unnecessary capabilities. Add `--user \"$(id -u):$(id -g)\"` to the plan `docker run` or the shared `sandbox` array; alternatively, make `$RUNNER_TEMP/plan` writable before the run, for example with `chmod 0777`. Verify that plan creates both output files and that the release plan step still behaves like its counterpart in bench.yml.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/bec0a4de-24f5-4811-8f03-7f179336a85e?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/bec0a4de-24f5-4811-8f03-7f179336a85e)",
+  "created_at": "2026-10-21T11:42:32Z",
+  "updated_at": "2026-10-21T11:42:32Z",
+  "html_url": "https://github.com/SigorMatt/harness-bench/pull/10#discussion_r4336351647",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/10",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4336351647"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/harness-bench/pull/10#discussion_r4336351647"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/10"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4336351647/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 209,
+  "original_start_line": 209,
+  "start_side": "RIGHT",
+  "line": 216,
+  "original_line": 216,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 175,
+  "position": 175,
+  "subject_type": "line"
+}
