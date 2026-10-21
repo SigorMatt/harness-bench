@@ -181,6 +181,20 @@ def test_a_command_that_hangs_is_killed_with_everything_it_started(run):
     assert not Path(f"/proc/{background}").exists() or "Z" in Path(f"/proc/{background}/stat").read_text().split()[2]
 
 
+def test_what_a_command_leaves_in_the_background_ends_with_it(run):
+    started = time.monotonic()
+    proc, stub, repo = run([reply(tool_call("bash", {"command": "sleep 300 & echo $! > bg.pid"})),
+                            reply(content="done")])
+    assert proc.returncode == 0
+    assert time.monotonic() - started < 4  # the background sleep does not hold the output pipe open
+    assert tool_results(stub, 1)[0].startswith("exit status 0")
+    background = int((repo / "bg.pid").read_text())
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and Path(f"/proc/{background}").exists():
+        time.sleep(0.1)
+    assert not Path(f"/proc/{background}").exists() or "Z" in Path(f"/proc/{background}/stat").read_text().split()[2]
+
+
 def test_a_spent_budget_ends_the_run_at_once(run):
     proc, stub, _ = run([reply(tool_call("bash", {"command": "true"})), (429, {"error": "budget"})])
     assert proc.returncode == 0

@@ -40,7 +40,8 @@ TEXT = {"type": "string"}
 LINE = {"type": "integer"}
 TOOLS = [
     _tool("bash", "Run a shell command in the repository root and return its exit status and output "
-          "(stdout and stderr together, shortened if long). It has no network and no input.",
+          "(stdout and stderr together, shortened if long). It has no network and no input, and "
+          "whatever it starts in the background ends with it.",
           {"command": TEXT}, ["command"]),
     _tool("read_file", "Read a text file with line numbers, optionally only lines start_line to end_line.",
           {"path": TEXT, "start_line": LINE, "end_line": LINE}, ["path"]),
@@ -100,7 +101,7 @@ def shorten(text: str, limit: int) -> str:
 def run_bash(command: str, config: dict) -> str:
     """Run a command in its own process group, keeping only the start and the end of its output.
 
-    The group is killed at the timeout, so whatever the command started ends too;
+    The group is killed when the command ends or at the timeout, so whatever it started ends too;
     output past what is kept is read and dropped, so a runaway command cannot
     fill the agent's memory.
     """
@@ -122,6 +123,10 @@ def run_bash(command: str, config: dict) -> str:
     try:
         process.wait(timeout=config["command_timeout_s"])
         status = f"exit status {process.returncode}"
+        try:
+            os.killpg(process.pid, signal.SIGKILL)  # what it left running in the background
+        except ProcessLookupError:
+            pass
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
         process.wait()
