@@ -30,7 +30,7 @@
             "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
           },
           "config_digest": {
-            "description": "Digest of the stock configuration the adapter writes (provider settings only).",
+            "description": "Tree digest of the adapter's config/, its stock configuration, which the image holds at /hb/config (spec §6.4).",
             "$ref": "urn:hb:schema:common:1#/$defs/digest"
           },
           "entrypoint": {
@@ -44,6 +44,10 @@
           "homepage": {
             "type": "string",
             "pattern": "^https://[\\x21-\\x7e]+$"
+          },
+          "build_commit": {
+            "description": "The commit of this repository that .github/workflows/harness.yml built the image from (spec §6.4). Not part of the entry key.",
+            "$ref": "urn:hb:schema:common:1#/$defs/git_sha"
           }
         }
       }

@@ -27,6 +27,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path, PurePosixPath
 
 from .identity import cohort_from_suite, cohort_id, entry_from_registry, entry_id
@@ -412,6 +413,57 @@ def verify_commands(pins: dict) -> list[list[str]]:
             "--deny-self-hosted-runners",
         ])
     return commands
+
+
+def docker_host() -> str | None:
+    """The daemon the current Docker context points at, so an empty DOCKER_CONFIG keeps it.
+
+    Only the address: a context that needs TLS material makes the pull fail, visibly.
+    """
+    if os.environ.get("DOCKER_HOST"):
+        return os.environ["DOCKER_HOST"]
+    try:
+        proc = subprocess.run(["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
+                              capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
+
+
+class AnonymousDocker:
+    """Commands run with an empty DOCKER_CONFIG, against the current Docker context's daemon.
+
+    Nothing is authenticated to a registry, so a pull succeeds only for a public
+    image. Use as a context manager; run() raises ReleaseError on a failure.
+    """
+
+    def __enter__(self):
+        host = docker_host()
+        self._config = tempfile.TemporaryDirectory()
+        self.env = {**os.environ, "DOCKER_CONFIG": self._config.name}
+        if host:
+            self.env["DOCKER_HOST"] = host
+        return self
+
+    def __exit__(self, *exc_info):
+        self._config.cleanup()
+
+    def run(self, command: list[str], *, capture: bool = False) -> bytes:
+        try:
+            proc = subprocess.run(command, env=self.env, check=False,
+                                  stdout=subprocess.PIPE if capture else None)
+        except OSError as exc:
+            raise ReleaseError(f"{command[0]}: {exc}") from None
+        if proc.returncode != 0:
+            raise ReleaseError(f"failed (exit status {proc.returncode}): {' '.join(command)}")
+        return proc.stdout or b""
+
+
+def run_anonymously(commands: list[list[str]]) -> None:
+    """Run verify commands in order with AnonymousDocker. Raises ReleaseError at the first failure."""
+    with AnonymousDocker() as docker:
+        for command in commands:
+            docker.run(command)
 
 
 def release_entry_at(git: Git, commit: str, scratch: Path) -> dict:

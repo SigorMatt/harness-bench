@@ -22,8 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path, PurePosixPath
@@ -34,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 from hb.release import (  # noqa: E402
     BENCH_WORKFLOW, REGISTRY_FILE, SLUG, SUITE_DIR, TOOLKIT_REPOSITORY, Git, ReleaseError, load_json, parse_json,
     check_image, check_inputs, check_pins, check_release_commit, check_version, pin_workflow, read_pins_file,
-    release_entry_at, suite_id_of, suite_repository, verify_commands,
+    release_entry_at, run_anonymously, suite_id_of, suite_repository, verify_commands,
 )
 
 
@@ -96,39 +94,13 @@ def cmd_pin(args) -> None:
           f"  git push origin {version}")
 
 
-def _docker_host() -> str | None:
-    """The daemon the current Docker context points at, so an empty DOCKER_CONFIG keeps it.
-
-    Only the address: a context that needs TLS material makes the pull fail, visibly.
-    """
-    if os.environ.get("DOCKER_HOST"):
-        return os.environ["DOCKER_HOST"]
-    try:
-        proc = subprocess.run(["docker", "context", "inspect", "--format", "{{.Endpoints.docker.Host}}"],
-                              capture_output=True, text=True, timeout=60, check=False)
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    return proc.stdout.strip() if proc.returncode == 0 and proc.stdout.strip() else None
-
-
 def cmd_verify(args) -> None:
     info = check_release_commit(Git(args.root), args.commit)
     print(f"{info['release_sha']}: one parent, the build commit {info['build_sha']}; "
           f"only the two image pins in {BENCH_WORKFLOW} change")
     if args.offline:
         return
-    host = _docker_host()
-    with tempfile.TemporaryDirectory() as empty_config:
-        env = {**os.environ, "DOCKER_CONFIG": empty_config}  # anonymous: only a public image pulls
-        if host:
-            env["DOCKER_HOST"] = host
-        for command in verify_commands(info):
-            try:
-                proc = subprocess.run(command, env=env, check=False)
-            except OSError as exc:
-                raise ReleaseError(f"{command[0]}: {exc}") from None
-            if proc.returncode != 0:
-                raise ReleaseError(f"failed (exit status {proc.returncode}): {' '.join(command)}")
+    run_anonymously(verify_commands(info))
     print("both images pull anonymously and were built by release.yml from the build commit on main")
 
 

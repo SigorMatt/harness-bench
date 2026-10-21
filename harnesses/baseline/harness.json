@@ -1,0 +1,10 @@
+{
+  "schema": "hb/harness/1",
+  "id": "baseline",
+  "version": "0.1.0",
+  "homepage": "https://github.com/SigorMatt/harness-bench/tree/main/harnesses/baseline",
+  "entrypoint": [
+    "python3",
+    "/hb/agent.py"
+  ]
+}

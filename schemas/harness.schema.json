@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:harness:1",
+  "title": "Harness adapter",
+  "description": "harnesses/<id>/harness.json: what the registry entry for an adapter image says besides the image and the digests (spec \u00a76.4). The adapter keeps its stock configuration in config/, which its image holds at /hb/config.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "id",
+    "version",
+    "homepage",
+    "entrypoint"
+  ],
+  "properties": {
+    "schema": {
+      "const": "hb/harness/1"
+    },
+    "id": {
+      "description": "The name of the adapter directory.",
+      "$ref": "urn:hb:schema:common:1#/$defs/slug"
+    },
+    "version": {
+      "description": "The harness version the image pins.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._+-]{1,64}$"
+    },
+    "homepage": {
+      "type": "string",
+      "pattern": "^https://[\\x21-\\x7e]+$"
+    },
+    "entrypoint": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "pattern": "^[\\x21-\\x7e]+$"
+      }
+    }
+  }
+}
