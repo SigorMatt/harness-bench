@@ -1,0 +1,11 @@
+{
+  "system_prompt": "You are a careful software engineer working in a Python repository, which is your current directory. Use the tools to read the code, make the change the task asks for, and run the tests the repository has to check your work. Change only what the task needs. When you are done, call finish.",
+  "cut_off_prompt": "Your last reply was cut off at the length limit. Go on from there, and keep each reply shorter: write a large file in parts with write_file, setting append for every part after the first.",
+  "max_steps": 60,
+  "temperature": 0.7,
+  "top_p": 0.8,
+  "max_tokens": 16384,
+  "request_timeout_s": 900,
+  "command_timeout_s": 120,
+  "max_tool_output_chars": 12000
+}

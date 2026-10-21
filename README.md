@@ -12,18 +12,20 @@ v1 is deliberately narrow:
   Contributors pay only for tokens.
 - **One task domain:** Python repository maintenance, seven categories, graded
   by observation checks that never enter the harness's or the probe's sandbox.
-- **One track:** stock harness configuration, only the model endpoint changed.
+- **One track:** stock harness configuration: changed only as running it here
+  needs (the model endpoint, no interactive prompts, no telemetry).
 
-**Status: the benchmark workflow and the release pipeline are complete; there
-is no release yet.** This repository contains the result-bundle spec, JSON
-schemas, a tested reference library, the model gateway (`hb/gateway.py`), the
-orchestrator that runs every rep of a task in Docker and grades it in a sandbox
-(`hb/orchestrator.py`), the plan and seal commands (`hb/plan.py`,
-`hb/seal.py`), the release tooling (`hb/release.py`,
-`scripts/release.py`), the image Dockerfiles, a generated example run and
-the workflows. Not yet built: the suite content (`suites/py-maint/`) and the
-registry of real harness adapters (`registry.json`), which the first release
-needs, and the results site.
+**Status: the benchmark workflow, the release pipeline and the harness image
+pipeline are complete; there is no release yet.** This repository contains the
+result-bundle spec, JSON schemas, a tested reference library, the model gateway
+(`hb/gateway.py`), the orchestrator that runs every rep of a task in Docker and
+grades it in a sandbox (`hb/orchestrator.py`), the plan and seal commands
+(`hb/plan.py`, `hb/seal.py`), the release and harness image tooling
+(`hb/release.py`, `hb/harness.py` and their scripts), the reference `baseline`
+harness (`harnesses/baseline`), the image Dockerfiles, a generated example run
+and the workflows. Not yet built: the suite content (`suites/py-maint/`), the
+registry (`registry.json`) with the first harness images, more harness
+adapters, and the results site.
 
 ## How results stay fair
 
@@ -39,12 +41,15 @@ docs/spec/result-bundle.md   the spec
 schemas/                     JSON Schemas (draft 2020-12)
 hb/                          reference library, model gateway, orchestrator and toolkit CLI
 docker/                      toolkit and suite image Dockerfiles
+harnesses/<id>/              harness adapters: harness.json, Dockerfile, config/ (spec §6.4)
 examples/                    a suite with one task, a registry, and a generated run
 scripts/make_examples.py     regenerates examples; --check fails if they are stale
 scripts/release.py           release steps: pin the images, verify a release commit, release table entry
+scripts/harness.py           harness image steps: register a built image, verify registry entries
 tests/                       functional tests
 .github/workflows/bench.yml  reusable benchmark workflow (image pins are placeholders on main)
 .github/workflows/release.yml  builds, checks, publishes and attests a release's images
+.github/workflows/harness.yml  builds, checks, publishes and attests one harness adapter image
 templates/                   caller workflow for submitters; intake for the results repo
 ```
 
@@ -69,6 +74,18 @@ tests/test_run_task_docker.py` builds the toolkit image and a stub harness and
 needs a local Docker daemon. `HB_TEST_BASE_IMAGE` picks the toolkit's base image;
 the test that runs the toolkit in its own container needs one with git and the
 docker CLI, as `docker/toolkit-base.Dockerfile` builds.
+
+## Adding a harness
+
+Add `harnesses/<id>/` in a pull request: `harness.json`, a `Dockerfile` that
+pins its base image by digest and the harness by version and sets no
+`ENTRYPOINT`, and `config/`, the stock configuration, changed from the
+harness's defaults only as the adapter contract asks (the gateway endpoint and
+model, no interactive prompts, no telemetry). Once it is merged, a maintainer starts the
+`harness` workflow with the id, makes a new GHCR package public, then registers
+the built image in `registry.json` with `scripts/harness.py pin` and `verify`,
+in a second pull request. The workflow run's summary lists the exact commands;
+[spec §6.4](docs/spec/result-bundle.md) explains them.
 
 ## Releasing
 

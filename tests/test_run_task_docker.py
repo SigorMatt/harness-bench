@@ -2,7 +2,8 @@
 
 Opt-in: set HB_DOCKER_TESTS=1. HB_TEST_BASE_IMAGE names the base for the
 toolkit image (python3 3.12+; default python:3.12-slim) and HB_TEST_HARNESS_BASE
-the base for the stub harness (default: the same).
+the base for the stub harness (default: the same). The baseline harness
+(harnesses/baseline) is built on its own pinned base, or on HB_TEST_BASELINE_BASE.
 
 What runs: the toolkit image built from docker/toolkit.Dockerfile (gateway,
 helper and probe sandbox), a stub harness image (tests/docker/stub_harness.py)
@@ -107,6 +108,15 @@ class StubProvider:
             "usage": {"prompt_tokens": 50, "completion_tokens": 5, "total_tokens": 55},
         }))
 
+    def reply(self, message: dict) -> None:
+        """Answer with this assistant message as it is (tool calls, for a real harness)."""
+        self.responses.put((200, {
+            "id": "stub", "object": "chat.completion", "created": 0, "model": "stub",
+            "choices": [{"index": 0, "finish_reason": "tool_calls" if message.get("tool_calls") else "stop",
+                         "message": message}],
+            "usage": {"prompt_tokens": 50, "completion_tokens": 5, "total_tokens": 55},
+        }))
+
     def fail(self, status: int) -> None:
         self.responses.put((status, {"error": {"type": "invalid_api_key", "message": "stub"}}))
 
@@ -148,7 +158,7 @@ def env(tmp_path_factory):
     provider.server.shutdown()
 
 
-def make_job(tmp_path, env, **changes) -> TaskJob:
+def make_job(tmp_path, env, harness=None, **changes) -> TaskJob:
     suite_dir = tmp_path / "suite"
     shutil.copytree(EXAMPLE_SUITE, suite_dir)
     suite = json.loads((suite_dir / "suite.json").read_text())
@@ -161,13 +171,13 @@ def make_job(tmp_path, env, **changes) -> TaskJob:
             target = target[part]
         target[leaf] = value
     (suite_dir / "suite.json").write_text(json.dumps(suite, indent=2))
-    harness = {"id": "stub", "image": env["harness"], "entrypoint": ["python3", "/hb/stub_harness.py"]}
+    harness = harness or {"id": "stub", "image": env["harness"], "entrypoint": ["python3", "/hb/stub_harness.py"]}
     return TaskJob(suite=suite, suite_dir=suite_dir, task_id=TASK_ID, harness=harness,
                    toolkit_image=env["toolkit"], run=RUN)
 
 
-def run(tmp_path, env, **changes) -> Path:
-    job = make_job(tmp_path, env, **changes)
+def run(tmp_path, env, harness=None, **changes) -> Path:
+    job = make_job(tmp_path, env, harness, **changes)
     bundle = run_task(job, docker=Docker(), clock=Clock(), out_dir=tmp_path / "out",
                       work_dir=tmp_path / "work", timing=TIMING)
     env["provider"].assert_drained()
@@ -396,6 +406,22 @@ def test_plan_and_seal_inside_the_toolkit_container(tmp_path, env):
     assert (seal_out / "run-manifest.json").read_text() == expected.read_text()
 
 
+def test_release_plan_check_runs_as_release_yml_runs_it(tmp_path, env):
+    """release.yml's plan check, its own shell lines: sandboxed, writing to a directory the runner owns."""
+    lines = (ROOT / ".github" / "workflows" / "release.yml").read_text().splitlines()
+    sandbox = next(line.strip() for line in lines if line.strip().startswith("sandbox=("))
+    start = next(i for i, line in enumerate(lines) if line.strip() == 'mkdir -p "$RUNNER_TEMP/plan"')
+    stop = next(i for i in range(start, len(lines)) if lines[i].strip().endswith("plan --suite /suite --out /out"))
+    script = "\n".join([sandbox, *(line.strip() for line in lines[start:stop + 1])])
+    shutil.copytree(EXAMPLE_SUITE, tmp_path / "suite")
+    proc = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=300,
+                          check=False, env={**os.environ, "RUNNER_TEMP": str(tmp_path), "TOOLKIT": "hb-test/toolkit",
+                                            "VERSION": "latest", "HARNESS_ID": "baseline", "HB_RUN_ATTEMPT": "1"})
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads((tmp_path / "plan" / "tasks.json").read_text()) == [TASK_ID]
+    assert (tmp_path / "plan" / "timeout_minutes").read_text() == "226\n"
+
+
 PROBES = {
     "report.py": "import json, sys\nprint('noise', file=sys.stderr)\njson.dump({'files': sorted(__import__('os')"
                  ".listdir(sys.argv[1]))}, sys.stdout)\n",
@@ -481,3 +507,39 @@ def test_toolkit_build_refuses_a_missing_registry_file(env):
     output = proc.stdout + proc.stderr
     assert proc.returncode != 0
     assert "IsADirectoryError" in output and "/opt/hb/registry.json" in output
+
+
+@pytest.fixture(scope="session")
+def baseline_image(env):
+    """harnesses/baseline built as harness.yml builds it: the adapter directory is the context.
+
+    On its pinned base, unless HB_TEST_BASELINE_BASE names another (for a machine that cannot pull it)."""
+    base = os.environ.get("HB_TEST_BASELINE_BASE")
+    return build(ROOT / "harnesses" / "baseline", ROOT / "harnesses" / "baseline" / "Dockerfile",
+                 "hb-test/baseline:latest", **({"PYTHON_IMAGE": base} if base else {}))
+
+
+def tool_call_message(call_id: str, name: str, arguments: dict) -> dict:
+    return {"role": "assistant", "content": None, "tool_calls": [
+        {"id": call_id, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
+
+
+def test_the_baseline_harness_fixes_the_task_end_to_end(tmp_path, env, baseline_image):
+    """The baseline image in a rep: its tool calls go through the gateway and change the workspace."""
+    provider = env["provider"]
+    provider.reply(tool_call_message("c1", "bash", {"command": "ls"}))
+    provider.reply(tool_call_message("c2", "write_file", {"path": "pager.py", "content": FIXED}))
+    provider.reply(tool_call_message("c3", "finish", {"summary": "fixed the off-by-one"}))
+    entrypoint = json.loads((ROOT / "harnesses" / "baseline" / "harness.json").read_text())["entrypoint"]
+    out = run(tmp_path, env, harness={"id": "baseline", "image": baseline_image, "entrypoint": entrypoint},
+              reps=1)
+    lifecycle = rep(out, 1, "lifecycle.json")
+    assert (lifecycle["termination"], lifecycle["exit_code"]) == ("exited", 0)
+    assert rep(out, 1, "grade.json")["resolved"] is True
+    records = [json.loads(line) for line in rep(out, 1, "gateway.jsonl").splitlines()]
+    assert [(r["outcome"], r["tool_calls"]["count"]) for r in records] == [("ok", 1)] * 3
+    after_ls = provider.requests[-2]["messages"][-1]
+    assert after_ls["role"] == "tool" and after_ls["content"].startswith("exit status 0")
+    assert "pager.py" in after_ls["content"]  # the task's repository is the working directory
+    assert "finish: fixed the off-by-one" in rep(out, 1, "harness.log")
+    assert leftovers() == []

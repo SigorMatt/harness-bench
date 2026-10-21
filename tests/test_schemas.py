@@ -23,6 +23,7 @@ def load(path):
     ("suite", EXAMPLES / "suite/suite.json"),
     ("task", EXAMPLES / "suite/tasks/fix-pagination-off-by-one/task.json"),
     ("registry", EXAMPLES / "registry.json"),
+    ("harness", EXAMPLES.parent / "harnesses/baseline/harness.json"),
     ("prices", EXAMPLES / "prices.json"),
     ("cohort", EXAMPLES / "cohort.json"),
     ("entry", EXAMPLES / "entry.json"),

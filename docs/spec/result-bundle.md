@@ -435,7 +435,7 @@ keeps its own state (history, caches, config) under `$HOME`, not in
 `/workspace`: anything left in `/workspace` is part of the patch unless it
 matches the suite's `ignore_paths`. Telemetry and update checks are switched off
 (there is no route for them anyway). That is the whole adapter: a thin image
-layer and an entrypoint script.
+layer and an entrypoint script, built and registered as §6.4 describes.
 
 ### 6.1 Running a rep
 
@@ -544,28 +544,40 @@ has no patterns, precedence). Its paths must be portable: no name Windows
 reserves (a control character, one of `"*:<>?\|`, a trailing dot or space, a
 device name such as `NUL` or `con.txt`) and no two paths that differ only in
 case, so the suite tree can be rebuilt on Linux, macOS or Windows (below).
-Those checks need packages from PyPI, which is why they run apart. The release
-job, which can push and attest, takes nothing from the first job and runs only
-this repository's code, with the runner's own Python and the standard library,
-pinned actions and images pinned by digest; the one exception is git, which the
-toolkit base installs from Debian's archive (see below). On a GitHub-hosted runner it:
+Those checks need packages from PyPI, which is why they run apart.
+
+A second job, also with no write permission, builds the toolkit image
+(`docker/toolkit.Dockerfile`: `hb/`, `schemas/` and the registry) on
+`docker/toolkit-base.Dockerfile`, whose Python and docker CLI images are pinned
+by digest and which installs git from Debian's archive, and the suite image
+(`docker/suite.Dockerfile`: the suite directory is the build context and is
+copied to `/suite`, with nothing else). It hands both on as a workflow artifact.
+
+The images job, which can push and attest, takes nothing from the first job and
+builds nothing. It runs only this repository's code with the runner's own Python
+and the standard library, and pinned actions; the toolkit image it checks runs
+only in a sandbox (no network, no capabilities, a read-only root, and none of the
+job's environment but the two variables plan needs; plan runs as the runner's user,
+so it can write its output without any capability). On a GitHub-hosted runner
+it:
 
 1. names the images (`scripts/release.py names`) and checks that the
    version's tag does not exist yet;
-2. builds the toolkit image (`docker/toolkit.Dockerfile`: `hb/`, `schemas/` and
-   the registry) on `docker/toolkit-base.Dockerfile`, whose Python and docker
-   CLI images are pinned by digest, and the suite image
-   (`docker/suite.Dockerfile`: the suite directory is the build context and is
-   copied to `/suite`, with nothing else);
-3. checks them as `bench.yml` uses them: `/suite` copied out of a created
+2. verifies every harness image in the registry (`scripts/harness.py verify`,
+   §6.4): each entry is what its build commit says, its image pulls
+   anonymously, `harness.yml` built it from that commit on main, and it holds
+   the entry's configuration;
+3. loads the two images and checks that they are the ones the build job built
+   (the same image ids);
+4. checks them as `bench.yml` uses them: `/suite` copied out of a created
    container is identical to the suite directory, the toolkit's registry is
    identical to `registry.json`, and plan succeeds in the toolkit image with no
    network;
-4. pushes both to GHCR, and pulls each back by the digest the push recorded;
-5. attests both with build provenance, stored in GHCR and in GitHub, which
+5. pushes both to GHCR, and pulls each back by the digest the push recorded;
+6. attests both with build provenance, stored in GHCR and in GitHub, which
    names the commit they were built from (the build commit) and
    `refs/heads/main`;
-6. uploads `release-pins.json`: the version, the build commit and both image
+7. uploads `release-pins.json`: the version, the build commit and both image
    references.
 
 **The release commit.** A workflow's own token cannot change workflow files,
@@ -624,6 +636,83 @@ Neither image is bit-for-bit reproducible: images record build timestamps, and
 the toolkit base installs git from Debian's archive at build time. That does not
 weaken a release: `bench.yml` pins the images the release workflow built and
 attested, by digest, not a recipe for building them.
+
+### 6.4 Harness images
+
+A harness is benchmarked through an adapter image (§6, adapter contract) that
+this repository builds, so what every registry entry names can be traced to
+reviewed files. `harnesses/<id>/` holds one adapter:
+
+- `harness.json` ([`schemas/harness.schema.json`](../../schemas/harness.schema.json)):
+  the id (the directory's name), the harness version the image pins, the
+  homepage and the entrypoint;
+- a `Dockerfile` whose build context is the adapter directory, putting the
+  adapter's files under `/hb`;
+- `config/`, the stock configuration, which the image holds at `/hb/config`.
+
+The image must have no `ENTRYPOINT` of its own: the registry's entrypoint is
+the harness container's whole command (§6). Two rules are for review: the
+Dockerfile pins every image it uses by digest (its base, and a `# syntax=`
+frontend if it names one) and the harness by version, with a lockfile with
+hashes for anything that has dependencies; and a third-party harness's
+configuration differs from its defaults only in what the adapter contract asks
+for: the endpoint and model the entrypoint takes from `$OPENAI_BASE_URL` and
+`$HB_MODEL`, no interactive prompts, no telemetry or update checks, and its state under
+`$HOME` (the `stock` track).
+
+`.github/workflows/harness.yml` runs when a maintainer starts it, from main only,
+with a harness id as its one input, in three jobs like the release workflow's
+(§6.3). The first, with no write permission, validates `harness.json` against
+its schema. The second, also with no write permission, builds the image, which
+installs the harness (npm, pip, apt), labels it with the harness id
+(`io.github.sigormatt.harness-bench.harness`), and hands it on as a workflow
+artifact. The third, which can push and attest, builds nothing: it loads the
+image, checks that it is the one the build job built, that its `/hb/config` is
+exactly the build commit's committed `config/`, that every `/hb` file the
+entrypoint names is there, that it carries the id label and has no
+`ENTRYPOINT`, then pushes it to GHCR as `ghcr.io/sigormatt/hb-harness-<id>`
+(tagged with the version and the build commit), pulls it back by digest,
+attests it with build provenance and uploads `harness-pins.json`. The build
+commit may hold no `.gitattributes` file, so the checkout the image is built
+from holds exactly the committed bytes. The first image of a new harness lands
+in a private GHCR package, which a maintainer makes public once.
+
+A maintainer then adds the registry entry in a pull request:
+`scripts/harness.py pin` refuses unless the adapter directory at main is the one
+the image was built from (the same git tree), and computes every field but the
+image from the build commit's committed files: `version`, `entrypoint` and
+`homepage` from `harness.json`, `config_digest` as the tree digest of
+`config/`, and `build_commit`, which is not part of the entry key (§3.3).
+`scripts/harness.py verify` recomputes each entry from its build commit, pulls
+its image anonymously, runs `gh attestation verify oci://<image> --repo
+SigorMatt/harness-bench --signer-workflow
+SigorMatt/harness-bench/.github/workflows/harness.yml --source-digest <build
+commit> --source-ref refs/heads/main --deny-self-hosted-runners`, and checks the
+pulled image: the id label, no `ENTRYPOINT`, and a `/hb/config` whose tree
+digest is the entry's `config_digest`. Provenance names the build commit but not
+the harness id; the label and the configuration digest tie the image to its
+entry as well. The release workflow's images job runs `verify` for every entry
+(§6.3), so a release's registry names only images built here from reviewed
+adapters.
+
+A harness image is untrusted code either way: it runs in the harness container
+(§6) and cannot reach anything but the gateway. Building it here does not add
+to a run's integrity; it makes the entry key honest about which harness, at
+which version and with which stock configuration, a result belongs to.
+
+**Baseline.** `harnesses/baseline` is the reference harness: a minimal
+tool-calling agent in one file, standard library only (`agent.py`). It sends
+the conversation with five tools (`bash`, `read_file`, `write_file`, `replace`,
+`finish`), runs every call in the repository, and stops when the model answers
+without a tool call, calls `finish`, or reaches the step limit; an answer cut
+off at the length limit makes it ask the model to go on in shorter replies, and
+a budget refusal (HTTP 429) stops it at once. Commands run in their own process
+group, killed at the time limit, and only the start and end of their output are
+kept. Its stock configuration (`config/agent.json`) sets the system prompt, the
+step limit, the sampling settings the model's card recommends, and the limits
+on replies, commands and their output. It gives the leaderboard a floor this
+project controls and lets the whole chain be tested without anyone else's
+harness.
 
 ## 7. Grading
 
@@ -796,6 +885,14 @@ protected-path restores, out-of-scope edits and infra re-runs.
   snapshot and the probe once per rep and each toolkit limit per attempt, and
   timing the copies, the diff and the patch apply, would bring it close to a
   bound; that is left for later.
+- **The baseline keeps its whole conversation.** `harnesses/baseline` resends
+  every turn and tool result on each step. With its stock limits (60 steps,
+  tool results of up to 12,000 characters) a long task can outgrow the model's
+  context window; the gateway's rejection then ends the harness with exit
+  status 2 (`exited`), and the rep is graded on the workspace as it stands. It
+  costs that rep's remaining steps, never a result's integrity. Bounding or
+  summarising the history would change what the baseline measures, so it is
+  left for later.
 
 ## 11. Versioning
 
@@ -824,5 +921,6 @@ cohort.
 | `hb/grade.py` | observation comparison, verdict, probe runner contract, `grade_rep` |
 | `hb/metrics.py` | usage and cost from gateway records |
 | `hb/accept.py` | expected files, attestation commands, run acceptance, attempt rules, dedup key |
+| `hb/harness.py` | harness images: adapters, the registry entry from its build commit, its checks (`scripts/harness.py`, `.github/workflows/harness.yml`) |
 | `hb/release.py` | releases: the release inputs, `bench.yml`'s pins, the release commit's checks, the release table entry (`scripts/release.py`, `.github/workflows/release.yml`) |
 | `hb/schemas.py` | schema loading and validation |

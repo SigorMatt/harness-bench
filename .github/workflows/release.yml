@@ -1,7 +1,8 @@
 # Release workflow (spec §6.3). Builds the toolkit and suite images from one
-# commit of main (the build commit), checks them the way bench.yml uses them,
-# publishes them to GHCR with build-provenance attestations, and uploads
-# release-pins.json for the maintainer, who then makes the release commit:
+# commit of main (the build commit) in a job that cannot push or attest, then
+# checks them the way bench.yml uses them, publishes them to GHCR with
+# build-provenance attestations, and uploads release-pins.json for the
+# maintainer, who then makes the release commit:
 #
 #   gh run download <run id> --name release-pins-<version>
 #   git switch --detach <build sha>
@@ -37,10 +38,10 @@ defaults:
 jobs:
   check:
     # Validating the inputs needs packages from PyPI, so it runs here, in a job
-    # with no write permission whose results the release job does not use: where
-    # the images are built, pushed and attested, only this repository's code, its
-    # pinned actions and images run (and git, which the toolkit base installs
-    # from Debian's archive).
+    # with no write permission whose results the images job does not use. The
+    # images job, which can push and attest, runs only this repository's code with
+    # the standard library and its pinned actions, and builds nothing; the toolkit
+    # image it checks runs only in a sandbox.
     if: github.repository == 'SigorMatt/harness-bench' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -65,20 +66,21 @@ jobs:
           # file system would not keep as they are.
           python3 scripts/release.py inputs --version "$VERSION"
 
-  images:
-    # Only from main of this repository, so the provenance names refs/heads/main,
-    # which scripts/release.py verify requires.
+  build:
+    # The toolkit base installs git from Debian's archive, so the images are built
+    # here, with no write permission. The images job only loads, checks, pushes and
+    # attests what this job built; it builds nothing itself.
     needs: check
     if: github.repository == 'SigorMatt/harness-bench' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: write      # push the images to GHCR
-      id-token: write      # signing identity for the attestations
-      attestations: write  # store the attestations
     env:
       PYTHONDONTWRITEBYTECODE: "1"  # nothing written into the checkout the images are built from
+    outputs:
+      toolkit_id: ${{ steps.save.outputs.toolkit_id }}
+      suite_id: ${{ steps.save.outputs.suite_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -88,13 +90,7 @@ jobs:
         id: inputs
         env:
           VERSION: ${{ inputs.version }}  # passed as data, never interpolated into the script
-        run: |
-          # The runner's own python3, and only the standard library (hb/release.py).
-          python3 scripts/release.py names --version "$VERSION" >> "$GITHUB_OUTPUT"
-          status=0
-          git ls-remote --exit-code --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "refs/tags/$VERSION" > /dev/null || status=$?
-          if [ "$status" -eq 0 ]; then echo "::error::the tag $VERSION already exists"; exit 1; fi
-          if [ "$status" -ne 2 ]; then echo "::error::cannot list the tags (git exit status $status)"; exit 1; fi
+        run: python3 scripts/release.py names --version "$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Build the images
         env:
@@ -114,6 +110,85 @@ jobs:
             "${labels[@]}" --tag "$TOOLKIT:$VERSION" .
           docker build --provenance=false --file docker/suite.Dockerfile "${labels[@]}" --tag "$SUITE:$VERSION" "$SUITE_DIR"
 
+      - name: Save the images
+        id: save
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          TOOLKIT: ${{ steps.inputs.outputs.toolkit }}
+          SUITE: ${{ steps.inputs.outputs.suite }}
+        run: |
+          docker save --output "$RUNNER_TEMP/images.tar" "$TOOLKIT:$VERSION" "$SUITE:$VERSION"
+          echo "toolkit_id=$(docker image inspect --format '{{.Id}}' "$TOOLKIT:$VERSION")" >> "$GITHUB_OUTPUT"
+          echo "suite_id=$(docker image inspect --format '{{.Id}}' "$SUITE:$VERSION")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the images
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-images
+          path: ${{ runner.temp }}/images.tar
+          if-no-files-found: error
+          retention-days: 7  # long enough to re-run a failed job of the same run
+
+  images:
+    # Only from main of this repository, so the provenance names refs/heads/main,
+    # which scripts/release.py verify requires.
+    needs: build
+    if: github.repository == 'SigorMatt/harness-bench' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60  # it pulls every registry harness image to verify it
+    permissions:
+      contents: read
+      packages: write      # push the images to GHCR
+      id-token: write      # signing identity for the attestations
+      attestations: write  # store the attestations
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"  # nothing written into the checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0  # every registry entry is checked against its build commit
+
+      - name: Name the images
+        id: inputs
+        env:
+          VERSION: ${{ inputs.version }}  # passed as data, never interpolated into the script
+        run: |
+          # The runner's own python3, and only the standard library (hb/release.py).
+          python3 scripts/release.py names --version "$VERSION" >> "$GITHUB_OUTPUT"
+          status=0
+          git ls-remote --exit-code --tags "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "refs/tags/$VERSION" > /dev/null || status=$?
+          if [ "$status" -eq 0 ]; then echo "::error::the tag $VERSION already exists"; exit 1; fi
+          if [ "$status" -ne 2 ]; then echo "::error::cannot list the tags (git exit status $status)"; exit 1; fi
+
+      - name: Verify the registry's harness images
+        env:
+          GH_TOKEN: ${{ github.token }}  # gh reads the attestations through GitHub's API
+        run: |
+          # Every registry entry is what its build commit says, its image pulls anonymously,
+          # and harness.yml built it from that commit on main (spec §6.4).
+          python3 scripts/harness.py verify
+
+      - name: Download the images
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-images
+          path: ${{ runner.temp }}/images
+
+      - name: Load the images
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+          TOOLKIT: ${{ steps.inputs.outputs.toolkit }}
+          SUITE: ${{ steps.inputs.outputs.suite }}
+          TOOLKIT_ID: ${{ needs.build.outputs.toolkit_id }}
+          SUITE_ID: ${{ needs.build.outputs.suite_id }}
+        run: |
+          docker load --quiet --input "$RUNNER_TEMP/images/images.tar"
+          for pair in "$TOOLKIT:$VERSION=$TOOLKIT_ID" "$SUITE:$VERSION=$SUITE_ID"; do
+            loaded=$(docker image inspect --format '{{.Id}}' "${pair%%=*}")
+            if [ "$loaded" != "${pair#*=}" ]; then echo "::error::${pair%%=*}: loaded $loaded, built ${pair#*=}"; exit 1; fi
+          done
+
       - name: Check the images as bench.yml uses them
         env:
           VERSION: ${{ steps.inputs.outputs.version }}
@@ -126,18 +201,22 @@ jobs:
         run: |
           # The suite image holds exactly the suite tree, and the toolkit exactly the registry.
           cid=$(docker create "$SUITE:$VERSION" /bin/true)
-          docker cp "$cid:/suite" "$RUNNER_TEMP/suite"
+          docker cp --follow-link "$cid:/suite" "$RUNNER_TEMP/suite"  # a symlink at /suite resolves inside the image
           docker rm "$cid"
           diff --recursive --no-dereference "$SUITE_DIR" "$RUNNER_TEMP/suite"
-          docker run --rm --network none --entrypoint cat "$TOOLKIT:$VERSION" /opt/hb/registry.json | cmp - "$REGISTRY_FILE"
-          # Plan the run exactly as bench.yml's first job does.
+          # The image runs here only sandboxed: no network, no capabilities, a read-only root,
+          # and nothing from this job's environment but the two variables plan needs.
+          sandbox=(--rm --network none --cap-drop ALL --security-opt no-new-privileges --read-only)
+          docker run "${sandbox[@]}" --entrypoint cat "$TOOLKIT:$VERSION" /opt/hb/registry.json | cmp - "$REGISTRY_FILE"
+          # Plan the run exactly as bench.yml's first job does, as the runner's user: with no
+          # capabilities, the image's root could not write to the runner's directory.
           mkdir -p "$RUNNER_TEMP/plan"
-          docker run --rm --network none \
+          docker run "${sandbox[@]}" --user "$(id -u):$(id -g)" \
             --mount "type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/plan,dst=/out" \
             --env HARNESS_ID --env HB_RUN_ATTEMPT \
             "$TOOLKIT:$VERSION" plan --suite /suite --out /out
-          docker run --rm --network none "$TOOLKIT:$VERSION" gateway --help > /dev/null
+          docker run "${sandbox[@]}" "$TOOLKIT:$VERSION" gateway --help > /dev/null
 
       - name: Push the images
         id: push
