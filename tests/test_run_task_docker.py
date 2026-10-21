@@ -406,6 +406,22 @@ def test_plan_and_seal_inside_the_toolkit_container(tmp_path, env):
     assert (seal_out / "run-manifest.json").read_text() == expected.read_text()
 
 
+def test_release_plan_check_runs_as_release_yml_runs_it(tmp_path, env):
+    """release.yml's plan check, its own shell lines: sandboxed, writing to a directory the runner owns."""
+    lines = (ROOT / ".github" / "workflows" / "release.yml").read_text().splitlines()
+    sandbox = next(line.strip() for line in lines if line.strip().startswith("sandbox=("))
+    start = next(i for i, line in enumerate(lines) if line.strip() == 'mkdir -p "$RUNNER_TEMP/plan"')
+    stop = next(i for i in range(start, len(lines)) if lines[i].strip().endswith("plan --suite /suite --out /out"))
+    script = "\n".join([sandbox, *(line.strip() for line in lines[start:stop + 1])])
+    shutil.copytree(EXAMPLE_SUITE, tmp_path / "suite")
+    proc = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, timeout=300,
+                          check=False, env={**os.environ, "RUNNER_TEMP": str(tmp_path), "TOOLKIT": "hb-test/toolkit",
+                                            "VERSION": "latest", "HARNESS_ID": "baseline", "HB_RUN_ATTEMPT": "1"})
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads((tmp_path / "plan" / "tasks.json").read_text()) == [TASK_ID]
+    assert (tmp_path / "plan" / "timeout_minutes").read_text() == "226\n"
+
+
 PROBES = {
     "report.py": "import json, sys\nprint('noise', file=sys.stderr)\njson.dump({'files': sorted(__import__('os')"
                  ".listdir(sys.argv[1]))}, sys.stdout)\n",

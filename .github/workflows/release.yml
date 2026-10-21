@@ -208,9 +208,10 @@ jobs:
           # and nothing from this job's environment but the two variables plan needs.
           sandbox=(--rm --network none --cap-drop ALL --security-opt no-new-privileges --read-only)
           docker run "${sandbox[@]}" --entrypoint cat "$TOOLKIT:$VERSION" /opt/hb/registry.json | cmp - "$REGISTRY_FILE"
-          # Plan the run exactly as bench.yml's first job does.
+          # Plan the run exactly as bench.yml's first job does, as the runner's user: with no
+          # capabilities, the image's root could not write to the runner's directory.
           mkdir -p "$RUNNER_TEMP/plan"
-          docker run "${sandbox[@]}" \
+          docker run "${sandbox[@]}" --user "$(id -u):$(id -g)" \
             --mount "type=bind,src=$RUNNER_TEMP/suite,dst=/suite,readonly" \
             --mount "type=bind,src=$RUNNER_TEMP/plan,dst=/out" \
             --env HARNESS_ID --env HB_RUN_ATTEMPT \

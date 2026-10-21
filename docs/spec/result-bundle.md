@@ -557,7 +557,8 @@ The images job, which can push and attest, takes nothing from the first job and
 builds nothing. It runs only this repository's code with the runner's own Python
 and the standard library, and pinned actions; the toolkit image it checks runs
 only in a sandbox (no network, no capabilities, a read-only root, and none of the
-job's environment but the two variables plan needs). On a GitHub-hosted runner
+job's environment but the two variables plan needs; plan runs as the runner's user,
+so it can write its output without any capability). On a GitHub-hosted runner
 it:
 
 1. names the images (`scripts/release.py names`) and checks that the
