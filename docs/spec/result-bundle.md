@@ -885,6 +885,14 @@ protected-path restores, out-of-scope edits and infra re-runs.
   snapshot and the probe once per rep and each toolkit limit per attempt, and
   timing the copies, the diff and the patch apply, would bring it close to a
   bound; that is left for later.
+- **The baseline keeps its whole conversation.** `harnesses/baseline` resends
+  every turn and tool result on each step. With its stock limits (60 steps,
+  tool results of up to 12,000 characters) a long task can outgrow the model's
+  context window; the gateway's rejection then ends the harness with exit
+  status 2 (`exited`), and the rep is graded on the workspace as it stands. It
+  costs that rep's remaining steps, never a result's integrity. Bounding or
+  summarising the history would change what the baseline measures, so it is
+  left for later.
 
 ## 11. Versioning
 
