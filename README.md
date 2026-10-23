@@ -43,7 +43,7 @@ schemas/                     JSON Schemas (draft 2020-12)
 hb/                          reference library, model gateway, orchestrator and toolkit CLI
 docker/                      toolkit, suite and task base image Dockerfiles
 harnesses/<id>/              harness adapters: harness.json, Dockerfile, config/ (spec §6.4)
-examples/                    a suite with one task, a registry, and a generated run
+examples/                    a suite with one task, a registry, a task base pin and a generated run
 scripts/make_examples.py     regenerates examples; --check fails if they are stale
 scripts/release.py           release steps: pin the images, verify a release commit, release table entry
 scripts/harness.py           harness image steps: register a built image, verify registry entries
@@ -81,8 +81,9 @@ docker CLI, as `docker/toolkit-base.Dockerfile` builds.
 ## Adding a harness
 
 Add `harnesses/<id>/` in a pull request: `harness.json`, a `Dockerfile` that
-pins its base image by digest and the harness by version and sets no
-`ENTRYPOINT`, and `config/`, the stock configuration, changed from the
+declares `ARG TASK_BASE` before its first `FROM`, builds its final stage
+`FROM ${TASK_BASE}` (the task base, below), pins any other image by digest and
+the harness by version, and sets no `ENTRYPOINT`, and `config/`, the stock configuration, changed from the
 harness's defaults only as the adapter contract asks (the gateway endpoint and
 model, no interactive prompts, no telemetry). Once it is merged, a maintainer starts the
 `harness` workflow with the id, makes a new GHCR package public, then registers
@@ -93,11 +94,13 @@ in a second pull request. The workflow run's summary lists the exact commands;
 ## The task base
 
 Every harness image starts from the task base (`docker/task-base.Dockerfile`):
-the toolkit's Python, git and pytest, so every agent has the same tools. After
+the toolkit's Python, git and pytest, so every agent starts from the same tools. After
 a change to its build files, a maintainer starts the `task-base` workflow on
 main and pins the built image in `task-base.json` with `scripts/task_base.py
-pin` and `verify`, in a pull request. The workflow run's summary lists the exact
-commands; [spec §6.5](docs/spec/result-bundle.md) explains them.
+pin` and `verify`, in a pull request. The suite's `runtime.task_base` must name
+the same image, and every harness is then built and registered again on it.
+The workflow run's summary lists the exact commands;
+[spec §6.5](docs/spec/result-bundle.md) explains them.
 
 ## Releasing
 

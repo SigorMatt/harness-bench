@@ -404,3 +404,95 @@ def test_task_base_at_reads_the_committed_file(repo):
     assert taskbase.task_base_at(Git(repo), "HEAD") == document
     with pytest.raises(ReleaseError):
         taskbase.task_base_at(Git(repo), "HEAD~1")  # the build commit has no task-base.json
+
+
+# ------------------------------------------------------------------ harness images and the suite
+
+BASE_LAYERS = ["sha256:" + "1" * 64, "sha256:" + "2" * 64]
+
+
+def inspect_with(layers, repo_digests=None) -> list:
+    return [{"Id": "sha256:" + "9" * 64, "RepoDigests": repo_digests or [], "RootFS": {"Type": "layers", "Layers": layers}}]
+
+
+def test_an_image_built_on_the_task_base_starts_with_its_layers():
+    base = inspect_with(BASE_LAYERS, [IMAGE])
+    taskbase.check_built_on(inspect_with(BASE_LAYERS + ["sha256:" + "3" * 64]), base)
+    taskbase.check_built_on(inspect_with(BASE_LAYERS), base)  # adding nothing is still built on it
+    assert taskbase.pulled_as(base, IMAGE) and not taskbase.pulled_as(base, IMAGE.replace("a", "b"))
+    assert not taskbase.pulled_as(base + base, IMAGE)
+
+
+@pytest.mark.parametrize("layers", [
+    ["sha256:" + "3" * 64] + BASE_LAYERS,  # the base's layers, but not first
+    BASE_LAYERS[1:] + ["sha256:" + "3" * 64],
+    BASE_LAYERS[:1],  # fewer than the base
+    [BASE_LAYERS[1], BASE_LAYERS[0]],
+])
+def test_an_image_not_built_on_the_task_base_is_refused(layers):
+    with pytest.raises(ReleaseError, match="not built on the task base"):
+        taskbase.check_built_on(inspect_with(layers), inspect_with(BASE_LAYERS))
+
+
+@pytest.mark.parametrize("inspect", [[], [{}], [{"RootFS": {"Layers": []}}], [{"RootFS": {"Layers": ["x"]}}],
+                                     inspect_with(BASE_LAYERS) * 2, {"RootFS": {"Layers": BASE_LAYERS}}])
+def test_an_inspection_without_layer_digests_for_one_image_is_refused(inspect):
+    with pytest.raises(ReleaseError, match="no layer digests"):
+        taskbase.image_layers(inspect)
+
+
+def test_the_suite_must_pin_the_pinned_task_base():
+    document = taskbase.task_base_document({"build_sha": BUILD, "image": IMAGE})
+    taskbase.check_suite_task_base({"runtime": {"task_base": IMAGE}}, document)
+    for suite in ({"runtime": {"task_base": IMAGE.replace("a", "b")}}, {"runtime": {}}, {}, []):
+        with pytest.raises(ReleaseError, match="runtime.task_base"):
+            taskbase.check_suite_task_base(suite, document)
+
+
+def add_suite(repo: Path, task_base: str = IMAGE.replace("a", "e")) -> Path:
+    """suites/py-maint/suite.json from the example suite, pinning task_base; committed."""
+    suite = json.loads((ROOT / "examples" / "suite" / "suite.json").read_text())
+    suite["runtime"]["task_base"] = task_base
+    path = repo / "suites" / "py-maint" / "suite.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(suite, indent=2) + "\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "--quiet", "--message", "the suite")
+    return path
+
+
+def test_pin_sets_the_suites_task_base_and_nothing_else(repo):
+    suite = add_suite(repo)
+    before = suite.read_text()
+    proc = cli(repo, "pin", str(pins_file(repo)))
+    assert proc.returncode == 0, proc.stderr
+    assert "git add task-base.json suites/py-maint/suite.json" in proc.stdout
+    changed = [line for line in difflib_lines(before, suite.read_text())]
+    assert changed == [f'-    "task_base": "{IMAGE.replace("a", "e")}"', f'+    "task_base": "{IMAGE}"']
+    git(repo, "add", ".")
+    git(repo, "commit", "--quiet", "--message", "Pin the task base")
+    proc = cli(repo, "verify", "--offline")
+    assert proc.returncode == 0 and "runtime.task_base is the same image" in proc.stdout, proc.stderr
+
+
+def difflib_lines(before: str, after: str) -> list[str]:
+    import difflib
+    return [line.rstrip("\n") for line in difflib.unified_diff(before.splitlines(True), after.splitlines(True), n=0)
+            if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+
+
+def test_verify_refuses_a_suite_that_names_another_task_base(repo):
+    pinned(repo)
+    add_suite(repo)
+    proc = cli(repo, "verify", "--offline")
+    assert proc.returncode == 1 and "runtime.task_base is" in proc.stderr and "not the task base" in proc.stderr
+
+
+def test_pin_refuses_a_suite_it_cannot_set_exactly_once(repo):
+    suite = add_suite(repo)
+    suite.write_text(suite.read_text().replace('"track"', '"task_base": "x",\n  "track"'))
+    git(repo, "commit", "--quiet", "--all", "--message", "two task bases")
+    proc = cli(repo, "pin", str(pins_file(repo)))
+    assert proc.returncode == 1 and 'must hold "task_base" exactly once' in proc.stderr
+    assert not (repo / "task-base.json").exists()
+

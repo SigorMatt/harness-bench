@@ -8,11 +8,14 @@ Run by .github/workflows/task-base.yml, with the standard library only:
 
 Run by a maintainer, in a full clone at main with the gh CLI logged in:
   pin task-base-pins.json   write task-base.json, if the build files at main are the ones
-                            the image was built from
-  verify                    check task-base.json and that the build files have not changed
-                            since its build commit, then pull the image anonymously and verify
-                            that task-base.yml built it from that commit on main;
-                            --offline checks the file and the build files only
+                            the image was built from, and set the suite's runtime.task_base
+                            to the same image
+  verify                    check task-base.json, that the build files have not changed since
+                            its build commit and that the suite pins the same image, then pull
+                            the image anonymously and verify that task-base.yml built it from
+                            that commit on main; --offline checks the files only
+
+The release workflow's images job runs `verify` too (spec §6.3).
 """
 
 from __future__ import annotations
@@ -25,9 +28,10 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from hb.release import AnonymousDocker, Git, ReleaseError  # noqa: E402
+from hb.release import AnonymousDocker, Git, ReleaseError, load_json  # noqa: E402
 from hb.taskbase import (  # noqa: E402
-    TASK_BASE_DOCKERFILE, TASK_BASE_FILE, TASK_BASE_REPOSITORY, check_build_files_unchanged, check_pins, image_tag,
+    SUITE_FILE, TASK_BASE_DOCKERFILE, TASK_BASE_FILE, TASK_BASE_REPOSITORY, check_build_files_unchanged, check_pins,
+    check_suite_task_base, image_tag, pin_suite_text,
     read_pins_file, read_task_base, task_base_document, verify_commands,
 )
 
@@ -55,10 +59,16 @@ def cmd_pin(args) -> None:
         raise ReleaseError("the working tree has uncommitted changes")
     check_build_files_unchanged(git, pins["build_sha"])
     document = task_base_document(pins)
+    suite = args.root / SUITE_FILE
+    suite_text = pin_suite_text(suite.read_text(encoding="utf-8"), document) if suite.is_file() else None
     (args.root / TASK_BASE_FILE).write_bytes((json.dumps(document, indent=2) + "\n").encode("utf-8"))
-    print(f"{TASK_BASE_FILE} now pins {document['image']}, built from {document['build_commit']}. Next:\n"
+    changed = [TASK_BASE_FILE]
+    if suite_text is not None:
+        suite.write_bytes(suite_text.encode("utf-8"))
+        changed.append(SUITE_FILE)  # a new task base is a new cohort: the suite names it (spec §6.5)
+    print(f"{' and '.join(changed)} now pin {document['image']}, built from {document['build_commit']}. Next:\n"
           f"  python3 scripts/task_base.py verify\n"
-          f"  git add {TASK_BASE_FILE}\n"
+          f"  git add {' '.join(changed)}\n"
           f"  git commit --message 'Pin the task base built from {image_tag(document['build_commit'])}'\n"
           f"  then open a pull request")
 
@@ -67,6 +77,9 @@ def cmd_verify(args) -> None:
     document = read_task_base(args.root)
     check_build_files_unchanged(Git(args.root), document["build_commit"])
     print(f"{TASK_BASE_FILE}: the build files are those of its build commit {document['build_commit']}")
+    if (args.root / SUITE_FILE).is_file():
+        check_suite_task_base(load_json(args.root / SUITE_FILE, SUITE_FILE), document)
+        print(f"{SUITE_FILE}: runtime.task_base is the same image")
     if args.offline:
         return
     with AnonymousDocker() as docker:

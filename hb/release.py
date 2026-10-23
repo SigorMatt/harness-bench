@@ -163,22 +163,27 @@ def check_portable_paths(paths: list[str]) -> None:
                 raise ReleaseError(f"{other!r} and {prefix!r} differ only in case")
 
 
-def check_inputs(suite_dir: Path, registry_path: Path) -> dict:
-    """Check the suite and registry a release would bake into its images.
+def check_inputs(suite_dir: Path, registry_path: Path, task_base_path: Path) -> dict:
+    """Check the suite and registry a release would bake into its images, against the pinned task base.
 
-    Returns the suite id, the registry's harness ids, and the suite tree digest.
-    Raises ReleaseError, so a release with inputs no run could use stops before
-    anything is built.
+    The suite must pin the task base task-base.json pins, and every registry entry
+    must have been built on it (spec §6.5). Returns the suite id, the registry's
+    harness ids, and the suite tree digest. Raises ReleaseError, so a release with
+    inputs no run could use stops before anything is built.
     """
     from jsonschema import ValidationError  # only here: see the module docstring
 
     from .schemas import validate
+    from .taskbase import check_suite_task_base, check_task_base  # hb.taskbase imports this module
 
-    suite_dir, registry_path = Path(suite_dir), Path(registry_path)
+    suite_dir, registry_path, task_base_path = Path(suite_dir), Path(registry_path), Path(task_base_path)
     if not (suite_dir / "suite.json").is_file():
         raise ReleaseError(f"{suite_dir}/suite.json is missing: the release suite is not in the repository")
     if not registry_path.is_file():
         raise ReleaseError(f"{registry_path} is missing: the release registry is not in the repository")
+    if not task_base_path.is_file():
+        raise ReleaseError(f"{task_base_path} is missing: no task base is pinned")
+    task_base = check_task_base(load_json(task_base_path, task_base_path.name))
     ignore_files = sorted(name for name in os.listdir(suite_dir)
                           if name.casefold() in (".dockerignore", ".containerignore"))
     if ignore_files:
@@ -192,6 +197,11 @@ def check_inputs(suite_dir: Path, registry_path: Path) -> dict:
     try:
         validate("suite", suite)
         validate("registry", registry)
+        validate("task-base", task_base)
+        check_suite_task_base(suite, task_base)
+        built_elsewhere = [h["id"] for h in registry["harnesses"] if h.get("task_base") != task_base["image"]]
+        if built_elsewhere:
+            raise ReleaseError(f"registry entries not built on the pinned task base: {', '.join(built_elsewhere)}")
         plan = plan_run(suite_dir)  # task ids, every task.json, probe timeouts, fits in a hosted job
         for task_id in plan["tasks"]:
             task = load_json(suite_dir / "tasks" / task_id / "task.json", f"task {task_id}")

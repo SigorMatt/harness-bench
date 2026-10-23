@@ -78,7 +78,8 @@ never written by hand ([`hb/identity.py`](../../hb/identity.py)):
   "runtime": {
     "runner": "github-hosted/ubuntu-24.04/x64",
     "harness_cpus_milli": 2000, "harness_memory_mib": 8192, "harness_pids": 512,
-    "network": "gateway-only"
+    "network": "gateway-only",
+    "task_base": "ghcr.io/sigormatt/hb-task-base@sha256:…"
   },
   "budget": { "wall_seconds": 1200, "total_tokens": 2000000, "model_calls": 200 },
   "track": "stock",
@@ -91,6 +92,9 @@ never written by hand ([`hb/identity.py`](../../hb/identity.py)):
 - `model.model_id` also pins the flavor: on Nebius Token Factory the Fast flavor
   is selected with a `-fast` suffix on the model id.
 - `runtime.network` has exactly one allowed value.
+- `runtime.task_base` is the image every harness image is built on (§6.5), so
+  the agents of two results compared within a cohort started from the same
+  tools.
 - Results are never ranked across cohorts.
 
 ### 3.3 Entry key
@@ -531,10 +535,12 @@ commit, whose `bench.yml` pins a toolkit image and a suite image by digest
 **Images.** `.github/workflows/release.yml` runs when a maintainer starts it,
 from main only, with the version (`vMAJOR.MINOR.PATCH`) as its one input. A
 first job, with no write permission, checks the release inputs
-(`scripts/release.py inputs`): the suite at `suites/py-maint/` and the
-registry at `registry.json` must pass their schemas and plan (§6.2), and the
-repository may hold no `.gitattributes` file, so a checkout holds exactly the
-committed bytes. Every path a task names that a run reads must be there too (§7,
+(`scripts/release.py inputs`): the suite at `suites/py-maint/`, the
+registry at `registry.json` and the task base pin at `task-base.json` must
+pass their schemas, the suite must pass plan (§6.2), the suite's
+`runtime.task_base` and every registry entry's `task_base` must be the image
+`task-base.json` pins (§6.5), and the repository may hold no `.gitattributes`
+file, so a checkout holds exactly the committed bytes. Every path a task names that a run reads must be there too (§7,
 Task layout): a run would not notice a missing `repo` directory but start every
 rep from an empty workspace. The suite directory is the suite image's build
 context, so it may hold no `.dockerignore` (or `.containerignore`) at its
@@ -563,21 +569,26 @@ it:
 
 1. names the images (`scripts/release.py names`) and checks that the
    version's tag does not exist yet;
-2. verifies every harness image in the registry (`scripts/harness.py verify`,
-   §6.4): each entry is what its build commit says, its image pulls
-   anonymously, `harness.yml` built it from that commit on main, and it holds
-   the entry's configuration;
-3. loads the two images and checks that they are the ones the build job built
+2. verifies the task base (`scripts/task_base.py verify`, §6.5): its build
+   files are the ones its build commit had, the suite pins the same image, the
+   image pulls anonymously, and `task-base.yml` built it from that commit on
+   main;
+3. verifies every harness image in the registry (`scripts/harness.py verify`,
+   §6.4): each entry is what its build commit says and was built on the pinned
+   task base, its image pulls anonymously, `harness.yml` built it from that
+   commit on main, its first layers are the task base's, and it holds the
+   entry's configuration;
+4. loads the two images and checks that they are the ones the build job built
    (the same image ids);
-4. checks them as `bench.yml` uses them: `/suite` copied out of a created
+5. checks them as `bench.yml` uses them: `/suite` copied out of a created
    container is identical to the suite directory, the toolkit's registry is
    identical to `registry.json`, and plan succeeds in the toolkit image with no
    network;
-5. pushes both to GHCR, and pulls each back by the digest the push recorded;
-6. attests both with build provenance, stored in GHCR and in GitHub, which
+6. pushes both to GHCR, and pulls each back by the digest the push recorded;
+7. attests both with build provenance, stored in GHCR and in GitHub, which
    names the commit they were built from (the build commit) and
    `refs/heads/main`;
-7. uploads `release-pins.json`: the version, the build commit and both image
+8. uploads `release-pins.json`: the version, the build commit and both image
    references.
 
 **The release commit.** A workflow's own token cannot change workflow files,
@@ -646,15 +657,18 @@ reviewed files. `harnesses/<id>/` holds one adapter:
 - `harness.json` ([`schemas/harness.schema.json`](../../schemas/harness.schema.json)):
   the id (the directory's name), the harness version the image pins, the
   homepage and the entrypoint;
-- a `Dockerfile` whose build context is the adapter directory, putting the
+- a `Dockerfile` whose build context is the adapter directory, whose final
+  stage is `FROM ${TASK_BASE}` (the task base, §6.5, which the workflow passes
+  in; `ARG TASK_BASE` comes before the first `FROM`), and which puts the
   adapter's files under `/hb`;
 - `config/`, the stock configuration, which the image holds at `/hb/config`.
 
 The image must have no `ENTRYPOINT` of its own: the registry's entrypoint is
-the harness container's whole command (§6). Two rules are for review: the
-Dockerfile pins every image it uses by digest (its base, and a `# syntax=`
-frontend if it names one) and the harness by version, with a lockfile with
-hashes for anything that has dependencies; and a third-party harness's
+the harness container's whole command (§6), and its first layers must be the
+task base's. Two rules are for review: the Dockerfile pins every other image it
+uses by digest (a stage it copies a runtime from, a `# syntax=` frontend if it
+names one) and the harness by version, with a lockfile with hashes for anything
+that has dependencies; and a third-party harness's
 configuration differs from its defaults only in what the adapter contract asks
 for: the endpoint and model the entrypoint takes from `$OPENAI_BASE_URL` and
 `$HB_MODEL`, no interactive prompts, no telemetry or update checks, and its state under
@@ -663,37 +677,47 @@ for: the endpoint and model the entrypoint takes from `$OPENAI_BASE_URL` and
 `.github/workflows/harness.yml` runs when a maintainer starts it, from main only,
 with a harness id as its one input, in three jobs like the release workflow's
 (§6.3). The first, with no write permission, validates `harness.json` against
-its schema. The second, also with no write permission, builds the image, which
-installs the harness (npm, pip, apt), labels it with the harness id
+its schema. The second, also with no write permission, builds the image on the
+task base the build commit's `task-base.json` pins, which it passes as the
+`TASK_BASE` build argument. The build installs the harness (npm, pip, apt),
+labels the image with the harness id
 (`io.github.sigormatt.harness-bench.harness`), and hands it on as a workflow
 artifact. The third, which can push and attest, builds nothing: it loads the
-image, checks that it is the one the build job built, that its `/hb/config` is
-exactly the build commit's committed `config/`, that every `/hb` file the
-entrypoint names is there, that it carries the id label and has no
-`ENTRYPOINT`, then pushes it to GHCR as `ghcr.io/sigormatt/hb-harness-<id>`
+image, checks that it is the one the build job built, pulls the task base by
+digest before it logs in, and checks that the image's first layers are the task
+base's, that its `/hb/config` is exactly the build commit's committed
+`config/`, that every `/hb` file the entrypoint names is there, that it
+carries the id label and has no `ENTRYPOINT`. It then pushes it to GHCR as `ghcr.io/sigormatt/hb-harness-<id>`
 (tagged with the version and the build commit), pulls it back by digest,
 attests it with build provenance and uploads `harness-pins.json`. The build
 commit may hold no `.gitattributes` file, so the checkout the image is built
 from holds exactly the committed bytes. The first image of a new harness lands
 in a private GHCR package, which a maintainer makes public once.
 
-A maintainer then adds the registry entry in a pull request:
-`scripts/harness.py pin` refuses unless the adapter directory at main is the one
-the image was built from (the same git tree), and computes every field but the
-image from the build commit's committed files: `version`, `entrypoint` and
-`homepage` from `harness.json`, `config_digest` as the tree digest of
-`config/`, and `build_commit`, which is not part of the entry key (§3.3).
-`scripts/harness.py verify` recomputes each entry from its build commit, pulls
-its image anonymously, runs `gh attestation verify oci://<image> --repo
-SigorMatt/harness-bench --signer-workflow
-SigorMatt/harness-bench/.github/workflows/harness.yml --source-digest <build
-commit> --source-ref refs/heads/main --deny-self-hosted-runners`, and checks the
-pulled image: the id label, no `ENTRYPOINT`, and a `/hb/config` whose tree
-digest is the entry's `config_digest`. Provenance names the build commit but not
-the harness id; the label and the configuration digest tie the image to its
-entry as well. The release workflow's images job runs `verify` for every entry
-(§6.3), so a release's registry names only images built here from reviewed
-adapters.
+A maintainer then adds the registry entry in a pull request.
+
+- `scripts/harness.py pin` refuses unless the adapter directory at main is the
+  one the image was built from (the same git tree), and unless the image was
+  built on the task base pinned now (§6.5). It computes every field but the
+  image from the build commit's committed files: `version`, `entrypoint` and
+  `homepage` from `harness.json`; `config_digest` as the tree digest of
+  `config/`; `task_base` from `task-base.json`; and `build_commit`. The last
+  two are not part of the entry key (§3.3). The task base is in the cohort key
+  instead, because the suite pins it.
+- `scripts/harness.py verify` recomputes each entry from its build commit and
+  refuses it unless its task base is the one pinned now. It pulls the task base
+  and the entry's image anonymously, and runs `gh attestation verify
+  oci://<image> --repo SigorMatt/harness-bench --signer-workflow
+  SigorMatt/harness-bench/.github/workflows/harness.yml --source-digest <build
+  commit> --source-ref refs/heads/main --deny-self-hosted-runners`. Then it
+  checks the pulled image: the id label, no `ENTRYPOINT`, its first layers the
+  task base's, and a `/hb/config` whose tree digest is the entry's
+  `config_digest`. Provenance names the build commit but not the harness id;
+  the label and the configuration digest tie the image to its entry as well.
+
+The release workflow's images job runs `verify` for every entry (§6.3), so a
+release's registry names only images built here from reviewed adapters, on the
+task base the suite pins.
 
 A harness image is untrusted code either way: it runs in the harness container
 (§6) and cannot reach anything but the gateway. Building it here does not add
@@ -769,21 +793,39 @@ commit> --source-ref refs/heads/main --deny-self-hosted-runners`.
 Whatever a harness adds on top of the task base, such as its own runtime and
 tools, is part of the harness and reviewed with its adapter (§6.4).
 
-**Not yet wired in.** These come with the suite (`suites/py-maint/`):
+**How it is held in place.**
 
-- The suite will pin the same image in `runtime.task_base`, which puts it in
-  the cohort key.
-- Every harness image will be built on the pinned task base. `harness.yml`
-  passes it as the `TASK_BASE` build argument. The image job pulls it by digest
-  itself, before it logs in to the registry, and requires the harness image's
-  first layers to be the task base's: the uncompressed layer digests of the
-  image configuration (`rootfs.diff_ids`, which `docker image inspect` shows as
-  `RootFS.Layers`).
-- Each registry entry will record the task base its build commit pinned, and
-  `verify` will check the pulled image's layers in the same way.
-- The release workflow's images job will run `scripts/task_base.py verify`, so
-  a release refuses a pin whose build files have changed since; a pull request
-  cannot, because a change to them is built only once it is on main.
+- **Harness images are built on it.** `harness.yml` passes the image that the
+  build commit's `task-base.json` pins as the `TASK_BASE` build argument, and
+  an adapter's final stage is `FROM ${TASK_BASE}`. The image job pulls the
+  task base by digest itself, before it logs in to the registry, so only a
+  public image can be pulled. It then requires the harness image's first layers
+  to be exactly the task base's layers. These are the uncompressed layer
+  digests of the image configuration (`rootfs.diff_ids`, which `docker image
+  inspect` shows as `RootFS.Layers`), so the harness image starts from exactly
+  the task base's file system.
+- **Each registry entry records it.** `task_base` is computed from the build
+  commit's `task-base.json`, like the entry's other fields (§6.4).
+  - `scripts/harness.py pin` and `verify` refuse an entry built on any task
+    base but the one pinned now. They also refuse a pin whose build files have
+    changed since its build commit.
+  - `verify` pulls the pinned task base and checks every pulled harness image's
+    layers the same way.
+- **The suite pins the same image** in `runtime.task_base`, which puts it in
+  the cohort key (§3.2). `scripts/task_base.py pin` sets it along with
+  `task-base.json`, and `verify` refuses a suite that names another image, so a
+  new pin comes with the suite's new cohort in the same pull request.
+  `scripts/release.py inputs` refuses a suite or a registry entry that names
+  any other task base.
+- **The release workflow verifies the pin.** Its images job runs
+  `scripts/task_base.py verify` before it verifies the registry, so a release
+  refuses a pin whose build files have changed since its build commit. A pull
+  request cannot refuse one: a change to the build files is built only once it
+  is on main, and a second pull request then pins the new image.
+
+A new task base therefore means new harness images: every adapter is built
+again on it and registered again, and the suite's new `runtime.task_base` makes
+a new cohort.
 
 ## 7. Grading
 
@@ -964,6 +1006,15 @@ protected-path restores, out-of-scope edits and infra re-runs.
   costs that rep's remaining steps, never a result's integrity. Bounding or
   summarising the history would change what the baseline measures, so it is
   left for later.
+- **What a harness image does on top of the task base.** The layer check (§6.5)
+  proves every harness image starts from the task base's file system, not that
+  its own layers leave the agent's tools as they were: a layer can replace
+  Python or pytest, and the image configuration (`ENV PATH`, `PYTHONPATH`) can
+  shadow them. That is bounded by review: an adapter's Dockerfile is reviewed
+  like the rest of it (§6.4), and its stock configuration may differ from the
+  harness's defaults only as the adapter contract asks. Whatever such a change
+  does, it changes only the agent's own environment, never a grade: grading
+  happens in the toolkit's sandbox, from the patch (§7).
 
 ## 11. Versioning
 

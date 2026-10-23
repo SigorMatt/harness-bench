@@ -7,7 +7,8 @@
       "image": "ghcr.io/sigormatt/hb-harness-baseline@sha256:409c20e79d103d2102749da8882b2869f653c5c6356fbb43eb64cb7f2c079ed7",
       "config_digest": "sha256:3c5246d6044ff2a30d36e591a2b044229466ea00b0fb3354663c72ac160e597c",
       "entrypoint": ["/hb/entrypoint"],
-      "homepage": "https://github.com/SigorMatt/harness-bench"
+      "homepage": "https://github.com/SigorMatt/harness-bench",
+      "task_base": "ghcr.io/sigormatt/hb-task-base@sha256:5f0c3d1b9e2a7c4f6e8d0b1a3c5e7f9d2b4a6c8e0f1d3b5a7c9e2f4d6b8a0c1e"
     },
     {
       "id": "example-harness",
@@ -15,7 +16,8 @@
       "image": "ghcr.io/sigormatt/hb-harness-example@sha256:19ed20e67dd690065d1b6a5287ae601ca2354bda14c065e3c510a39297ca4d5c",
       "config_digest": "sha256:07e76bfcdb31ab4db9ca2c45c02e13a8b59277b7aa2d22fcddfc826d0d6c77cf",
       "entrypoint": ["/hb/entrypoint"],
-      "homepage": "https://example.com/example-harness"
+      "homepage": "https://example.com/example-harness",
+      "task_base": "ghcr.io/sigormatt/hb-task-base@sha256:5f0c3d1b9e2a7c4f6e8d0b1a3c5e7f9d2b4a6c8e0f1d3b5a7c9e2f4d6b8a0c1e"
     }
   ]
 }

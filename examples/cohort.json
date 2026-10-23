@@ -3,7 +3,7 @@
   "suite": {
     "id": "py-maint",
     "version": "1.0.0",
-    "digest": "sha256:1a1f48f807e8a32f88249911159c37056e027431e16ab4c1bbc6aa4b994a5e93"
+    "digest": "sha256:14f3e6c43d19d3de0dcea0fb621afd5618b7090a5e02b640227c522e87bfef9f"
   },
   "model": {
     "provider": "nebius-token-factory",
@@ -16,7 +16,8 @@
     "harness_cpus_milli": 2000,
     "harness_memory_mib": 8192,
     "harness_pids": 512,
-    "network": "gateway-only"
+    "network": "gateway-only",
+    "task_base": "ghcr.io/sigormatt/hb-task-base@sha256:5f0c3d1b9e2a7c4f6e8d0b1a3c5e7f9d2b4a6c8e0f1d3b5a7c9e2f4d6b8a0c1e"
   },
   "budget": {
     "wall_seconds": 1200,

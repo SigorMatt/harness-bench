@@ -2,12 +2,12 @@
 
 Opt-in: set HB_DOCKER_TESTS=1. HB_TEST_BASE_IMAGE names the base for the
 toolkit image (python3 3.12+; default python:3.12-slim) and HB_TEST_HARNESS_BASE
-the base for the stub harness (default: the same). The baseline harness
-(harnesses/baseline) is built on its own pinned base, or on HB_TEST_BASELINE_BASE.
-The task base (docker/task-base.Dockerfile) is built on its pinned base, with
-git from Debian's archive and pytest from PyPI. On a machine that cannot reach
-them, HB_TEST_TASK_BASE names an image to use as the task base instead, and the
-test that builds it is skipped.
+the base for the stub harness (default: the same). The task base
+(docker/task-base.Dockerfile) is built on its pinned base, with git from
+Debian's archive and pytest from PyPI, and the baseline harness
+(harnesses/baseline) on the task base. On a machine that cannot reach them,
+HB_TEST_TASK_BASE names an image to use as the task base instead, and the test
+that tries the task base is skipped.
 
 What runs: the toolkit image built from docker/toolkit.Dockerfile (gateway,
 helper and probe sandbox), a stub harness image (tests/docker/stub_harness.py)
@@ -41,7 +41,9 @@ from hb import profile
 from hb.dockercli import Clock, Docker
 from hb.manifest import extract_bundle, pack_bundle, tree_digest, verify_task_bundle
 from hb.orchestrator import DockerProbeRunner, GatewayFailed, TaskJob, Timing, run_task
+from hb.release import ReleaseError
 from hb.schemas import validate
+from hb.taskbase import check_built_on
 
 pytestmark = pytest.mark.skipif(os.environ.get("HB_DOCKER_TESTS") != "1",
                                 reason="Docker tests are opt-in: set HB_DOCKER_TESTS=1")
@@ -515,13 +517,22 @@ def test_toolkit_build_refuses_a_missing_registry_file(env):
     assert "IsADirectoryError" in output and "/opt/hb/registry.json" in output
 
 
+@pytest.fixture(scope="session")
+def task_base():
+    """docker/task-base.Dockerfile built as task-base.yml builds it (docker/ is the context), or the stand-in
+    HB_TEST_TASK_BASE names. Returns the image name."""
+    stand_in = os.environ.get("HB_TEST_TASK_BASE")
+    if stand_in:
+        return stand_in
+    build(ROOT / "docker", ROOT / "docker" / "task-base.Dockerfile", "hb-test/task-base:latest")
+    return "hb-test/task-base:latest"
+
+
 @pytest.mark.skipif(bool(os.environ.get("HB_TEST_TASK_BASE")),
                     reason="HB_TEST_TASK_BASE names a stand-in: this machine cannot build the task base")
-def test_the_task_base_works_as_task_base_yml_tries_it():
-    """docker/task-base.Dockerfile built as task-base.yml builds it (docker/ is the context), then tried with
-    the workflow's own lines: the harness container's user, a read-only root and no network."""
-    tag = "hb-test/task-base:latest"
-    build(ROOT / "docker", ROOT / "docker" / "task-base.Dockerfile", tag)
+def test_the_task_base_works_as_task_base_yml_tries_it(task_base):
+    """The task base tried with the workflow's own lines: the harness container's user, a read-only root
+    and no network."""
     lines = [line.strip() for line in (ROOT / ".github" / "workflows" / "task-base.yml").read_text().splitlines()]
     start = next(i for i, line in enumerate(lines) if line.startswith("profile=("))
     stop = next(i for i in range(start, len(lines)) if lines[i].endswith("git --version"))
@@ -538,13 +549,28 @@ def test_the_task_base_works_as_task_base_yml_tries_it():
 
 
 @pytest.fixture(scope="session")
-def baseline_image(env):
-    """harnesses/baseline built as harness.yml builds it: the adapter directory is the context.
-
-    On its pinned base, unless HB_TEST_BASELINE_BASE names another (for a machine that cannot pull it)."""
-    base = os.environ.get("HB_TEST_BASELINE_BASE")
+def baseline_image(env, task_base):
+    """harnesses/baseline built as harness.yml builds it: the adapter directory is the context, and the
+    task base is the TASK_BASE build argument."""
     return build(ROOT / "harnesses" / "baseline", ROOT / "harnesses" / "baseline" / "Dockerfile",
-                 "hb-test/baseline:latest", **({"PYTHON_IMAGE": base} if base else {}))
+                 "hb-test/baseline:latest", TASK_BASE=task_base)
+
+
+def test_the_baseline_image_starts_with_the_task_base_layers(tmp_path, task_base, baseline_image):
+    """The check harness.yml and verify make, on real images: the baseline is built on the task base;
+    an image with the same files on another base is not."""
+    other = tmp_path / "other"
+    shutil.copytree(ROOT / "harnesses" / "baseline", other)
+    (other / "Dockerfile").write_text("FROM scratch\nCOPY agent.py /hb/agent.py\nCOPY config/ /hb/config/\n")
+    elsewhere = build(other, other / "Dockerfile", "hb-test/not-on-the-task-base:latest")
+
+    def inspect(image):
+        return json.loads(sh("docker", "image", "inspect", image))
+    check_built_on(inspect(baseline_image), inspect(task_base))
+    with pytest.raises(ReleaseError, match="not built on the task base"):
+        check_built_on(inspect(elsewhere), inspect(task_base))
+    with pytest.raises(ReleaseError, match="not built on the task base"):
+        check_built_on(inspect(task_base), inspect(baseline_image))  # the base does not start with the image
 
 
 def tool_call_message(call_id: str, name: str, arguments: dict) -> dict:

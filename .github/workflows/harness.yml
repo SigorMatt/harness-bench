@@ -1,8 +1,10 @@
 # Harness image workflow (spec §6.4). Builds the adapter image for one harness
-# from one commit of main (the build commit) in a job that cannot push or
-# attest, then checks the image against the build commit's files, publishes it
-# to GHCR with a build-provenance attestation, and uploads harness-pins.json for
-# the maintainer, who then adds the registry entry in a pull request:
+# from one commit of main (the build commit), on the task base that commit's
+# task-base.json pins (spec §6.5), in a job that cannot push or attest. Then
+# checks the image against the build commit's files and the task base,
+# publishes it to GHCR with a build-provenance attestation, and uploads
+# harness-pins.json for the maintainer, who then adds the registry entry in a
+# pull request:
 #
 #   gh run download <run id> --name harness-pins-<id>
 #   git switch --create register-<id> origin/main
@@ -85,10 +87,12 @@ jobs:
           IMAGE: ${{ steps.names.outputs.image }}
           TAG: ${{ steps.names.outputs.tag }}
           VERSION: ${{ steps.names.outputs.version }}
+          TASK_BASE: ${{ steps.names.outputs.task_base }}
         run: |
-          # The adapter directory is the build context; its Dockerfile pins what it installs.
-          # The label names the harness, which scripts/harness.py checks on every image it verifies.
-          docker build --provenance=false --file "$ADAPTER/Dockerfile" \
+          # The adapter directory is the build context; its Dockerfile pins what it installs and
+          # starts FROM the task base it is given. The label names the harness, which
+          # scripts/harness.py checks on every image it verifies.
+          docker build --provenance=false --file "$ADAPTER/Dockerfile" --build-arg "TASK_BASE=$TASK_BASE" \
             --label "io.github.sigormatt.harness-bench.harness=$HARNESS" \
             --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \
@@ -144,18 +148,24 @@ jobs:
           IMAGE: ${{ steps.names.outputs.image }}
           TAG: ${{ steps.names.outputs.tag }}
           BUILT_ID: ${{ needs.build.outputs.image_id }}
+          TASK_BASE: ${{ steps.names.outputs.task_base }}
         run: |
           docker load --quiet --input "$RUNNER_TEMP/image/image.tar"
           loaded=$(docker image inspect --format '{{.Id}}' "$IMAGE:$TAG")
           if [ "$loaded" != "$BUILT_ID" ]; then echo "::error::loaded $loaded, built $BUILT_ID"; exit 1; fi
+          # The task base, pulled here by digest with an empty Docker configuration: anonymously, so only
+          # a public image can be pulled, whatever credentials the runner has.
+          DOCKER_CONFIG="$(mktemp -d)" docker pull --quiet "$TASK_BASE" > /dev/null
+          docker image inspect "$TASK_BASE" > "$RUNNER_TEMP/base-inspect.json"
           # Its /hb/config is the build commit's config/, the entrypoint's /hb files are there,
-          # it is labelled with the harness id and it has no ENTRYPOINT of its own.
+          # it is labelled with the harness id, it has no ENTRYPOINT of its own, and its first
+          # layers are the task base's.
           docker image inspect "$IMAGE:$TAG" > "$RUNNER_TEMP/inspect.json"
           cid=$(docker create "$IMAGE:$TAG" /hb-never-run)
           docker cp --follow-link "$cid:/hb" "$RUNNER_TEMP/hb"  # a symlink at /hb resolves inside the image
           docker rm "$cid"
           python3 scripts/harness.py check-image --harness "$HARNESS" --copied "$RUNNER_TEMP/hb" \
-            --inspect "$RUNNER_TEMP/inspect.json"
+            --inspect "$RUNNER_TEMP/inspect.json" --base-inspect "$RUNNER_TEMP/base-inspect.json"
 
       - name: Push the image
         id: push

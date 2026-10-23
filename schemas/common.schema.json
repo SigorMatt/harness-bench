@@ -109,7 +109,7 @@
     "runtime": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["runner", "harness_cpus_milli", "harness_memory_mib", "harness_pids", "network"],
+      "required": ["runner", "harness_cpus_milli", "harness_memory_mib", "harness_pids", "network", "task_base"],
       "properties": {
         "runner": {
           "type": "string",
@@ -133,6 +133,10 @@
         "network": {
           "description": "The only network mode: the harness can reach the gateway and nothing else.",
           "const": "gateway-only"
+        },
+        "task_base": {
+          "description": "The task base (spec §6.5): the image every harness image is built on, so every agent works with the same Python, git and pytest. Part of the cohort key.",
+          "$ref": "#/$defs/image_ref"
         }
       }
     },
