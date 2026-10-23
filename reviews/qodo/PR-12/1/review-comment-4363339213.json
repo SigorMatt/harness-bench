@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4363339213",
+  "pull_request_review_id": 5633301924,
+  "id": 4363339213,
+  "node_id": "PRRC_kwDOVO0AUs8AAAABBBNFzQ",
+  "diff_hunk": "@@ -48,6 +48,10 @@\n           \"build_commit\": {\n             \"description\": \"The commit of this repository that .github/workflows/harness.yml built the image from (spec §6.4). Not part of the entry key.\",\n             \"$ref\": \"urn:hb:schema:common:1#/$defs/git_sha\"\n+          },\n+          \"task_base\": {\n+            \"description\": \"The task base the image was built on, as the build commit's task-base.json pins it (spec §6.5). Not part of the entry key: the suite pins the same image, so it is in the cohort key.\",\n+            \"$ref\": \"urn:hb:schema:common:1#/$defs/image_ref\"",
+  "path": "schemas/registry.schema.json",
+  "commit_id": "6b5b3fe2f685b5bdae1ca068e5c184ada2536810",
+  "original_commit_id": "6b5b3fe2f685b5bdae1ca068e5c184ada2536810",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n2\\. Registry validation accepts unusable entries <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\nThe registry schema defines <b><i>task_base</i></b> but does not add it to each entry’s <b><i>required</i></b> fields. An\nentry without it passes schema validation, then fails the new release-input comparison and harness\nverification, making the schema an unreliable check of the registry’s required shape.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nRegistry entries may omit `task_base` under the schema even though release and harness verification require it.\n## Fix Focus Areas\n- schemas/registry.schema.json[25-54]\n## Recommended Fix\nAdd `task_base` to the registry entry object's `required` array.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/323cc6ed-d6b6-4ad2-acaf-7dff411254cf?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/323cc6ed-d6b6-4ad2-acaf-7dff411254cf)",
+  "created_at": "2026-10-23T19:14:38Z",
+  "updated_at": "2026-10-23T19:14:38Z",
+  "html_url": "https://github.com/SigorMatt/harness-bench/pull/12#discussion_r4363339213",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/12",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4363339213"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/harness-bench/pull/12#discussion_r4363339213"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/12"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4363339213/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 52,
+  "original_start_line": 52,
+  "start_side": "RIGHT",
+  "line": 54,
+  "original_line": 54,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 7,
+  "position": 7,
+  "subject_type": "line"
+}
