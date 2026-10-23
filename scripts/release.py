@@ -4,8 +4,10 @@
 Run by .github/workflows/release.yml:
   inputs --version vX.Y.Z   (unprivileged job) check the version, the release suite and
                             registry against their schemas and plan, the paths each task
-                            names, and that the suite image holds every suite file and the
-                            suite tree can be rebuilt on any OS; needs jsonschema
+                            names, that the suite and every registry entry name the task
+                            base task-base.json pins, and that the suite image holds every
+                            suite file and the suite tree can be rebuilt on any OS; needs
+                            jsonschema
   names --version vX.Y.Z    (release job, standard library only) print the image names
                             and inputs as key=value lines for $GITHUB_OUTPUT
   pins --version ... --build-sha ... --toolkit-image ... --suite-image ... --out FILE
@@ -34,6 +36,7 @@ from hb.release import (  # noqa: E402
     check_image, check_inputs, check_pins, check_release_commit, check_version, pin_workflow, read_pins_file,
     release_entry_at, run_anonymously, suite_id_of, suite_repository, verify_commands,
 )
+from hb.taskbase import TASK_BASE_FILE  # noqa: E402
 
 
 def _names(root: Path, version: str) -> dict:
@@ -59,7 +62,7 @@ def cmd_inputs(args) -> None:
     attributes = [p for _, _, p in git.tree("HEAD") if PurePosixPath(p).name == ".gitattributes"]
     if attributes:
         raise ReleaseError(f"{attributes}: a .gitattributes file can make a checkout differ from the committed files")
-    check_inputs(args.root / SUITE_DIR, args.root / REGISTRY_FILE)
+    check_inputs(args.root / SUITE_DIR, args.root / REGISTRY_FILE, args.root / TASK_BASE_FILE)
     _print_lines(_names(args.root, args.version))
 
 

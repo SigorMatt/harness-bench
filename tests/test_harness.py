@@ -22,6 +22,10 @@ ROOT = Path(__file__).resolve().parent.parent
 BASELINE = ROOT / "harnesses" / "baseline"
 IMAGE = "ghcr.io/sigormatt/hb-harness-baseline@sha256:" + "a" * 64
 OTHER_IMAGE = "ghcr.io/sigormatt/hb-harness-baseline@sha256:" + "b" * 64
+TASK_BASE = "ghcr.io/sigormatt/hb-task-base@sha256:" + "5" * 64
+OTHER_TASK_BASE = "ghcr.io/sigormatt/hb-task-base@sha256:" + "6" * 64
+BASE_LAYERS = ["sha256:" + "1" * 64, "sha256:" + "2" * 64]
+ADAPTER_LAYERS = ["sha256:" + "3" * 64]
 GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
 
@@ -39,12 +43,24 @@ def cli(repo: Path, *args: str, env=None, stdlib_only=False) -> subprocess.Compl
                           env=env or GIT_ENV, capture_output=True, text=True, check=False)
 
 
+def write_task_base(root: Path, image: str) -> None:
+    """task-base.json pinning image, built from the repository's first commit, which holds docker/."""
+    first = git(root, "rev-list", "--max-parents=0", "HEAD")
+    document = {"schema": "hb/task-base/1", "image": image, "build_commit": first}
+    (root / "task-base.json").write_text(json.dumps(document, indent=2) + "\n")
+
+
 @pytest.fixture
 def repo(tmp_path) -> Path:
-    """A repository holding the baseline adapter, at its build commit."""
+    """A repository holding the task base's build files (its first commit), then the baseline adapter and
+    task-base.json pinning TASK_BASE (the harness build commit)."""
     root = tmp_path / "repo"
-    shutil.copytree(BASELINE, root / "harnesses" / "baseline", ignore=shutil.ignore_patterns("__pycache__"))
+    shutil.copytree(ROOT / "docker", root / "docker")
     git(root, "init", "--quiet", "--initial-branch=main")
+    git(root, "add", ".")
+    git(root, "commit", "--quiet", "--message", "task base build commit")
+    shutil.copytree(BASELINE, root / "harnesses" / "baseline", ignore=shutil.ignore_patterns("__pycache__"))
+    write_task_base(root, TASK_BASE)
     git(root, "add", ".")
     git(root, "commit", "--quiet", "--message", "build commit")
     return root
@@ -162,9 +178,17 @@ def test_the_image_holds_config_and_the_entrypoints_files(tmp_path):
     harness.check_image_files(BASELINE, copied_hb(tmp_path), good_harness())
 
 
-def inspect_of(labels=None, entrypoint=None) -> list:
+def inspect_of(labels=None, entrypoint=None, layers=None) -> list:
     labels = {harness.HARNESS_LABEL: "baseline"} if labels is None else labels
-    return [{"Id": "sha256:" + "9" * 64, "Config": {"Entrypoint": entrypoint, "Cmd": ["python3"], "Labels": labels}}]
+    layers = BASE_LAYERS + ADAPTER_LAYERS if layers is None else layers
+    return [{"Id": "sha256:" + "9" * 64, "Config": {"Entrypoint": entrypoint, "Cmd": ["python3"], "Labels": labels},
+             "RootFS": {"Type": "layers", "Layers": layers}}]
+
+
+def base_inspect_of(ref=TASK_BASE, layers=None) -> list:
+    """docker image inspect of the task base, pulled by ref."""
+    return [{"Id": "sha256:" + "8" * 64, "RepoDigests": [ref], "Config": {"Entrypoint": None, "Cmd": ["python3"]},
+             "RootFS": {"Type": "layers", "Layers": BASE_LAYERS if layers is None else layers}}]
 
 
 def test_symlinks_in_the_copied_image_are_refused(tmp_path):
@@ -291,7 +315,8 @@ def test_inputs_and_names(repo):
     names = cli(repo, "names", "--harness", "baseline", "--build-sha", "c" * 40, stdlib_only=True)
     assert names.returncode == 0, names.stderr
     assert names.stdout.splitlines() == ["id=baseline", "version=0.1.0", "dir=harnesses/baseline",
-                                         "image=ghcr.io/sigormatt/hb-harness-baseline", "tag=0.1.0-" + "c" * 12]
+                                         "image=ghcr.io/sigormatt/hb-harness-baseline", "tag=0.1.0-" + "c" * 12,
+                                         "task_base=" + TASK_BASE]
     assert cli(repo, "names", "--harness", "baseline", "--build-sha", "HEAD").returncode == 1
     assert cli(repo, "inputs", "--harness", "missing").returncode == 1
     inputs = cli(repo, "inputs", "--harness", "baseline", stdlib_only=True)  # the check job installs jsonschema
@@ -304,12 +329,20 @@ def inspect_file(tmp_path: Path, **changes) -> Path:
     return path
 
 
+def base_inspect_file(tmp_path: Path, **changes) -> Path:
+    path = tmp_path / "base-inspect.json"
+    path.write_text(json.dumps(base_inspect_of(**changes)))
+    return path
+
+
 def test_check_image_and_pins_need_only_the_standard_library(repo, tmp_path):
     proc = cli(repo, "check-image", "--harness", "baseline", "--copied", str(copied_hb(tmp_path)),
-               "--inspect", str(inspect_file(tmp_path)), stdlib_only=True)
+               "--inspect", str(inspect_file(tmp_path)), "--base-inspect", str(base_inspect_file(tmp_path)),
+               stdlib_only=True)
     assert proc.returncode == 0, proc.stderr
     proc = cli(repo, "check-image", "--harness", "baseline", "--copied", str(copied_hb(tmp_path / "b")),
-               "--inspect", str(inspect_file(tmp_path, entrypoint=["x"])))
+               "--inspect", str(inspect_file(tmp_path, entrypoint=["x"])),
+               "--base-inspect", str(base_inspect_file(tmp_path)))
     assert proc.returncode == 1 and "ENTRYPOINT" in proc.stderr
     out = tmp_path / "harness-pins.json"
     proc = cli(repo, "pins", "--harness", "baseline", "--build-sha", "c" * 40, "--image", IMAGE, "--out", str(out),
@@ -327,12 +360,12 @@ def test_pin_computes_the_entry_from_the_build_commit(repo):
     entry_now = pinned(repo)
     assert entry_now == {"id": "baseline", "version": "0.1.0", "image": IMAGE,
                          "config_digest": tree_digest(BASELINE / "config"), "entrypoint": ["python3", "/hb/agent.py"],
-                         "homepage": good_harness()["homepage"], "build_commit": build}
+                         "homepage": good_harness()["homepage"], "build_commit": build, "task_base": TASK_BASE}
     from hb.schemas import validate
     validate("registry", registry(repo))
     proc = cli(repo, "verify", "--offline")
     assert proc.returncode == 0, proc.stderr
-    assert f"the entry is what its build commit {build} says" in proc.stdout
+    assert f"the entry is what its build commit {build} says, built on the task base" in proc.stdout
 
 
 def test_pinning_again_replaces_the_entry(repo):
@@ -386,22 +419,25 @@ def test_verify_takes_ids(repo):
 
 
 def fake_tools(tmp_path: Path, config_dir: Path, inspect: list | None = None, gh_exit: int = 0,
-               symlink: bool = False) -> tuple[dict, Path]:
+               symlink: bool = False, base_inspect: list | None = None) -> tuple[dict, Path]:
     """PATH with recording stand-ins for docker and gh (git stays reachable). Returns the env and the log.
 
-    The docker stand-in answers `image inspect` with inspect, and `cp <container>:/hb/config DEST`
-    by copying config_dir, as if the pulled image held it (or, with symlink, by leaving a symlink to it,
-    as docker cp does for a symlink it does not follow).
+    The docker stand-in answers `image inspect` of the task base with base_inspect and of any other
+    image with inspect, and `cp <container>:/hb/config DEST` by copying config_dir, as if the pulled
+    image held it (or, with symlink, by leaving a symlink to it, as docker cp does for a symlink it
+    does not follow).
     """
     bin_dir, log = tmp_path / "bin", tmp_path / "calls.log"
     bin_dir.mkdir(parents=True)
     (bin_dir / "git").symlink_to(shutil.which("git"))
     (tmp_path / "inspect.json").write_text(json.dumps(inspect_of() if inspect is None else inspect))
+    (tmp_path / "base.json").write_text(json.dumps(base_inspect_of() if base_inspect is None else base_inspect))
     record = ('n=0; for f in "$DOCKER_CONFIG"/* "$DOCKER_CONFIG"/.[!.]*; do [ -e "$f" ] && n=$((n + 1)); done\n'
               'printf "%s|%s|%s\\n" "${0##*/}" "$*" "$n" >> ' + str(log) + "\n")
     docker = ("#!/bin/sh\n" + record + 'case "$1" in\n'
               '  context) echo unix:///fake.sock ;;\n'
-              f'  image) /bin/cat {tmp_path / "inspect.json"} ;;\n'
+              f'  image) case "$3" in *hb-task-base*) /bin/cat {tmp_path / "base.json"} ;; '
+              f'*) /bin/cat {tmp_path / "inspect.json"} ;; esac ;;\n'
               '  create) echo fake-container ;;\n'
               '  cp) for dest; do :; done; ' + (f'/bin/ln -s {config_dir} "$dest"' if symlink
                                                  else f'/bin/cp -r {config_dir} "$dest"') + ' ;;\n'
@@ -425,13 +461,19 @@ def test_verify_online_pulls_anonymously_checks_provenance_and_the_image(repo, t
     proc = cli(repo, "verify", env=env, stdlib_only=True)
     assert proc.returncode == 0, proc.stderr
     made = [(tool, args) for tool, args, _ in calls(log) if not args.startswith("context")]
-    assert made == [(command[0], " ".join(command[1:])) for command in harness.verify_commands(entry_now)] + [
+    copied_to = next(args for _, args in made if args.startswith("cp ")).split()[-1]
+    assert made == [("docker", f"pull --quiet {TASK_BASE}"), ("docker", f"image inspect {TASK_BASE}")] + as_calls(
+        harness.verify_commands(entry_now)) + [
         ("docker", f"image inspect {IMAGE}"), ("docker", f"create {IMAGE} /hb-never-run"),
-        ("docker", "cp --follow-link fake-container:/hb/config " + made[4][1].split()[-1]),
+        ("docker", "cp --follow-link fake-container:/hb/config " + copied_to),
         ("docker", "rm fake-container")]
     # An empty Docker configuration for every call after the one that reads the current context.
     assert {entries for _, args, entries in calls(log) if not args.startswith("context")} == {"0"}
-    assert "holds config_digest's /hb/config" in proc.stdout
+    assert "starts with the task base's layers, and holds config_digest's /hb/config" in proc.stdout
+
+
+def as_calls(commands: list[list[str]]) -> list[tuple[str, str]]:
+    return [(command[0], " ".join(command[1:])) for command in commands]
 
 
 @pytest.mark.parametrize("setup,message", [
@@ -440,6 +482,9 @@ def test_verify_online_pulls_anonymously_checks_provenance_and_the_image(repo, t
     (lambda tmp: {"inspect": inspect_of(entrypoint=["/bin/sh"])}, "ENTRYPOINT of its own"),
     (lambda tmp: {"config_dir": tmp / "other-config"}, "not the entry's config_digest"),
     (lambda tmp: {"symlink": True}, "is a symlink"),  # even to the right files: they would be this machine's
+    (lambda tmp: {"inspect": inspect_of(layers=["sha256:" + "7" * 64] + ADAPTER_LAYERS)}, "not built on"),
+    (lambda tmp: {"inspect": inspect_of(layers=BASE_LAYERS[1:] + ADAPTER_LAYERS)}, "not built on"),
+    (lambda tmp: {"base_inspect": base_inspect_of(layers=BASE_LAYERS + ["sha256:" + "4" * 64])}, "not built on"),
 ])
 def test_verify_online_refuses_an_image_that_does_not_match(repo, tmp_path, setup, message):
     pinned(repo)
@@ -466,8 +511,94 @@ def test_check_image_compares_with_the_committed_files_not_the_checkout(repo, tm
     shutil.copytree(repo / "harnesses" / "baseline" / "config", image / "config")
     shutil.copy(BASELINE / "agent.py", image / "agent.py")
     proc = cli(repo, "check-image", "--harness", "baseline", "--copied", str(image),
-               "--inspect", str(inspect_file(tmp_path)))
+               "--inspect", str(inspect_file(tmp_path)), "--base-inspect", str(base_inspect_file(tmp_path)))
     assert proc.returncode == 1 and "is not the adapter's config" in proc.stderr
+
+
+@pytest.mark.parametrize("inspect,base_inspect,message", [
+    (inspect_of(layers=["sha256:" + "7" * 64] + ADAPTER_LAYERS), base_inspect_of(), "not built on the task base"),
+    (inspect_of(layers=ADAPTER_LAYERS), base_inspect_of(), "not built on the task base"),
+    (inspect_of(), base_inspect_of(ref=OTHER_TASK_BASE), "not the inspection of the task base task-base.json pins"),
+    (inspect_of(), base_inspect_of() + base_inspect_of(), "not the inspection of the task base task-base.json pins"),
+    (inspect_of(), [{"RepoDigests": [TASK_BASE]}], "no layer digests"),
+])
+def test_check_image_refuses_an_image_not_built_on_the_task_base(repo, tmp_path, inspect, base_inspect, message):
+    (tmp_path / "inspect.json").write_text(json.dumps(inspect))
+    (tmp_path / "base-inspect.json").write_text(json.dumps(base_inspect))
+    proc = cli(repo, "check-image", "--harness", "baseline", "--copied", str(copied_hb(tmp_path)),
+               "--inspect", str(tmp_path / "inspect.json"), "--base-inspect", str(tmp_path / "base-inspect.json"))
+    assert proc.returncode == 1 and message in proc.stderr, proc.stderr
+
+
+def change_task_base(repo: Path, task_base: str) -> None:
+    write_task_base(repo, task_base)
+    git(repo, "commit", "--quiet", "--all", "--message", "another task base")
+
+
+def test_pin_refuses_an_image_built_on_an_earlier_task_base(repo):
+    pins = pins_file(repo)  # the build commit pins TASK_BASE
+    change_task_base(repo, OTHER_TASK_BASE)
+    proc = cli(repo, "pin", str(pins))
+    assert proc.returncode == 1 and "was built on the task base" in proc.stderr
+    assert f"task-base.json now pins {OTHER_TASK_BASE}: run harness.yml again" in proc.stderr
+    assert not (repo / "registry.json").exists()
+
+
+def test_verify_refuses_an_entry_once_another_task_base_is_pinned(repo):
+    pinned(repo)
+    change_task_base(repo, OTHER_TASK_BASE)
+    proc = cli(repo, "verify", "--offline", stdlib_only=True)
+    assert proc.returncode == 1 and f"task-base.json now pins {OTHER_TASK_BASE}" in proc.stderr
+
+
+def test_pin_and_verify_refuse_a_task_base_pin_its_build_files_have_outlived(repo):
+    pins = pins_file(repo)
+    entry_now = pinned(repo)
+    with open(repo / "docker" / "task-base-requirements.txt", "a", encoding="utf-8") as fh:
+        fh.write("# changed\n")
+    git(repo, "commit", "--quiet", "--all", "--message", "a change to the task base")
+    proc = cli(repo, "verify", "--offline", stdlib_only=True)
+    assert proc.returncode == 1 and "changed since the task base's build commit" in proc.stderr
+    proc = cli(repo, "pin", str(pins))
+    assert proc.returncode == 1 and "run task-base.yml again" in proc.stderr
+    assert registry(repo)["harnesses"] == [entry_now]
+
+
+def test_verify_refuses_an_entry_whose_task_base_its_build_commit_does_not_back(repo):
+    pinned(repo)
+    document = registry(repo)
+    document["harnesses"][0]["task_base"] = OTHER_TASK_BASE
+    (repo / "registry.json").write_text(json.dumps(document))
+    write_task_base(repo, OTHER_TASK_BASE)  # even when it is the one pinned now
+    git(repo, "commit", "--quiet", "--all", "--message", "a claimed task base")
+    proc = cli(repo, "verify", "--offline")
+    assert proc.returncode == 1 and "is not what its build commit says: task_base" in proc.stderr
+
+
+def test_pin_refuses_a_build_commit_without_a_task_base(tmp_path):
+    root = tmp_path / "repo"
+    shutil.copytree(BASELINE, root / "harnesses" / "baseline", ignore=shutil.ignore_patterns("__pycache__"))
+    git(root, "init", "--quiet", "--initial-branch=main")
+    git(root, "add", ".")
+    git(root, "commit", "--quiet", "--message", "build commit, no task base")
+    pins = pins_file(root)
+    write_task_base(root, TASK_BASE)
+    git(root, "add", ".")
+    git(root, "commit", "--quiet", "--message", "the task base")
+    proc = cli(root, "pin", str(pins))
+    assert proc.returncode == 1 and "pins no task base an image could be built on" in proc.stderr
+
+
+@pytest.mark.parametrize("task_base", ["ghcr.io/sigormatt/hb-task-base@sha256:" + "0" * 64,
+                                       "ghcr.io/sigormatt/hb-task-base:latest",
+                                       "ghcr.io/sigormatt/hb-toolkit@sha256:" + "5" * 64])
+def test_names_refuses_a_task_base_not_pinned_by_digest(repo, task_base):
+    change_task_base(repo, task_base)
+    proc = cli(repo, "names", "--harness", "baseline", "--build-sha", "c" * 40, stdlib_only=True)
+    assert proc.returncode == 1 and "task-base.json" in proc.stderr, proc.stderr
+    (repo / "task-base.json").unlink()
+    proc = cli(repo, "names", "--harness", "baseline", "--build-sha", "c" * 40, stdlib_only=True)
+    assert proc.returncode == 1 and "task-base.json is missing" in proc.stderr
 
 
 def test_names_refuses_a_gitattributes_file(repo):

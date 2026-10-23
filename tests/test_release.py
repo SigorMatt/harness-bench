@@ -16,9 +16,11 @@ from pathlib import Path
 import pytest
 
 from hb import release
+from hb.taskbase import TASK_BASE_FILE
 from hb.release import Git, ReleaseError
 
 ROOT = Path(__file__).resolve().parent.parent
+OTHER_TASK_BASE = "ghcr.io/sigormatt/hb-task-base@sha256:" + "6" * 64
 EXAMPLES = ROOT / "examples"
 BENCH = ROOT / ".github" / "workflows" / "bench.yml"
 TOOLKIT_REF = "ghcr.io/sigormatt/hb-toolkit@sha256:" + "a" * 64
@@ -64,12 +66,17 @@ def repo(tmp_path) -> Path:
     root = tmp_path / "repo"
     shutil.copytree(EXAMPLES / "suite", root / release.SUITE_DIR)
     shutil.copy(EXAMPLES / "registry.json", root / release.REGISTRY_FILE)
+    shutil.copy(EXAMPLES / "task-base.json", root / TASK_BASE_FILE)
     (root / release.BENCH_WORKFLOW).parent.mkdir(parents=True)
     (root / release.BENCH_WORKFLOW).write_text(PLACEHOLDER_BENCH)
     git(root, "init", "--quiet", "--initial-branch=main")
     git(root, "add", ".")
     git(root, "commit", "--quiet", "--message", "build commit")
     return root
+
+
+def check_inputs(repo: Path) -> dict:
+    return release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE, repo / TASK_BASE_FILE)
 
 
 def pins_file(repo: Path, **changes) -> Path:
@@ -179,7 +186,7 @@ def test_malformed_release_pins_are_refused(pins):
 # ------------------------------------------------------------------ inputs
 
 def test_release_inputs(repo):
-    inputs = release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+    inputs = check_inputs(repo)
     assert inputs["suite_id"] == "py-maint"
     assert inputs["harness_ids"] == ["baseline", "example-harness"]
 
@@ -204,11 +211,21 @@ def edit_json(path: Path, change) -> None:
                          lambda d: (d.update(reps=10), d["infra"].update(max_reruns_per_rep=3))), "minutes"),
     (lambda r: edit_json(next((r / release.SUITE_DIR / "tasks").glob("*/task.json")), lambda d: d.pop("scope")),
      "schema"),
+    (lambda r: (r / TASK_BASE_FILE).unlink(), "no task base is pinned"),
+    (lambda r: edit_json(r / TASK_BASE_FILE, lambda d: d.pop("build_commit")), "expected exactly the keys"),
+    (lambda r: edit_json(r / TASK_BASE_FILE, lambda d: d.update(image=OTHER_TASK_BASE)),
+     "runtime.task_base is .* not the task base task-base.json pins"),
+    (lambda r: edit_json(r / release.SUITE_DIR / "suite.json", lambda d: d["runtime"].update(task_base=OTHER_TASK_BASE)),
+     "runtime.task_base is .* not the task base task-base.json pins"),
+    (lambda r: edit_json(r / release.REGISTRY_FILE, lambda d: d["harnesses"][1].update(task_base=OTHER_TASK_BASE)),
+     "not built on the pinned task base: example-harness"),
+    (lambda r: edit_json(r / release.REGISTRY_FILE, lambda d: d["harnesses"][0].pop("task_base")),
+     "not built on the pinned task base: baseline"),
 ])
 def test_inputs_no_run_could_use_are_refused(repo, break_it, message):
     break_it(repo)
     with pytest.raises(ReleaseError, match=message):
-        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+        check_inputs(repo)
 
 
 @pytest.mark.parametrize("break_it,message", [
@@ -223,7 +240,7 @@ def test_inputs_no_run_could_use_are_refused(repo, break_it, message):
 def test_inputs_refuse_a_task_path_a_run_reads_that_is_not_there(repo, break_it, message):
     break_it(next((repo / release.SUITE_DIR / "tasks").iterdir()))
     with pytest.raises(ReleaseError, match=message):
-        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+        check_inputs(repo)
 
 
 def test_inputs_command_prints_the_workflow_outputs(repo):
@@ -266,7 +283,7 @@ def test_inputs_refuse_a_gitattributes_file(repo):
 def test_inputs_refuse_a_symlink_in_the_suite(repo):
     (repo / release.SUITE_DIR / "link.json").symlink_to("suite.json")
     with pytest.raises(ReleaseError):
-        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+        check_inputs(repo)
 
 
 @pytest.mark.parametrize("name", [".dockerignore", ".containerignore", ".DockerIgnore"])
@@ -275,11 +292,11 @@ def test_inputs_refuse_an_ignore_file_at_the_suite_root(repo, name):
     # Buildah read these there (case-insensitively on macOS and Windows) and leave files out.
     (repo / release.SUITE_DIR / name).write_text("tasks\n")
     with pytest.raises(ReleaseError, match="would leave files out"):
-        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+        check_inputs(repo)
     (repo / release.SUITE_DIR / name).unlink()
     (repo / release.SUITE_DIR / name).symlink_to("missing")  # even one that points nowhere
     with pytest.raises(ReleaseError, match="would leave files out"):
-        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+        check_inputs(repo)
 
 
 @pytest.mark.parametrize("names", [("x:y.txt",), ("a\\b.txt",), ("NUL",), ("tasks/con.txt",), ("a?b",),
@@ -292,7 +309,7 @@ def test_inputs_refuse_paths_some_file_system_cannot_hold(repo, names):
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(name)
     with pytest.raises(ReleaseError, match="not a portable path|differ only in case"):
-        release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)
+        check_inputs(repo)
 
 
 def test_portable_paths():
@@ -319,7 +336,7 @@ def test_a_dockerignore_deeper_in_the_suite_is_an_ordinary_file(repo):
     # No builder reads it, so it is copied like any other file.
     task = next((repo / release.SUITE_DIR / "tasks").iterdir())
     (task / ".dockerignore").write_text("repo\n")
-    assert release.check_inputs(repo / release.SUITE_DIR, repo / release.REGISTRY_FILE)["suite_id"] == "py-maint"
+    assert check_inputs(repo)["suite_id"] == "py-maint"
 
 
 def test_pins_command_writes_only_what_pin_accepts(tmp_path):

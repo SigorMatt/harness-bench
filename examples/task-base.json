@@ -1,0 +1,5 @@
+{
+  "schema": "hb/task-base/1",
+  "image": "ghcr.io/sigormatt/hb-task-base@sha256:5f0c3d1b9e2a7c4f6e8d0b1a3c5e7f9d2b4a6c8e0f1d3b5a7c9e2f4d6b8a0c1e",
+  "build_commit": "4d7a1c2e9b8f3a6d5c0e1f2a3b4c5d6e7f8a9b0c"
+}

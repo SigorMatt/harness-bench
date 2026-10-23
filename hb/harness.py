@@ -3,20 +3,23 @@
 harnesses/<id>/ holds one adapter: harness.json (hb/harness/1), a Dockerfile
 whose build context is that directory, and config/, the stock configuration
 the image holds at /hb/config. .github/workflows/harness.yml builds the image
-from one commit of main, the build commit, in a job that cannot push or
-attest, labelled with its harness id. The job that can then checks the loaded
-image against the build commit's committed files (check_image_files,
-check_image_config), pushes it to GHCR as ghcr.io/sigormatt/hb-harness-<id>,
-attests it and uploads harness-pins.json.
+from one commit of main, the build commit, on the task base that commit's
+task-base.json pins (spec §6.5), in a job that cannot push or attest, labelled
+with its harness id. The job that can then checks the loaded image against the
+build commit's committed files (check_image_files, check_image_config) and the
+task base (hb.taskbase.check_built_on), pushes it to GHCR as
+ghcr.io/sigormatt/hb-harness-<id>, attests it and uploads harness-pins.json.
 
 A maintainer then adds the registry entry in a pull request
 (`scripts/harness.py pin`). Every field but the image comes from the build
 commit's committed files: version, entrypoint and homepage from harness.json,
-config_digest the tree digest of config/, and build_commit itself. So
-check_entry() can recompute an entry from its build commit, verify_commands()
-check the image's provenance against the same commit, and check_pulled_image()
-checks the image itself: its label, no ENTRYPOINT, and /hb/config whose digest
-is config_digest.
+config_digest the tree digest of config/, task_base from task-base.json, and
+build_commit itself. So check_entry() can recompute an entry from its build
+commit, check_task_base_current() require the task base it was built on to be
+the one pinned now, verify_commands() check the image's provenance against the
+build commit, and check_pulled_image() check the image itself: its label, no
+ENTRYPOINT, its first layers the task base's, and /hb/config whose digest is
+config_digest.
 
 Everything here but check_inputs() uses the standard library only, so the
 privileged jobs run it without anything from PyPI.
@@ -34,6 +37,7 @@ from .manifest import VerificationError, list_files, tree_digest
 from .release import (
     BUILD_REF, GIT_SHA, IMAGE_PREFIX, REPOSITORY, SLUG, Git, ReleaseError, check_image, load_json,
 )
+from .taskbase import TASK_BASE_FILE, check_build_files_unchanged, check_built_on, task_base_at
 
 HARNESSES_DIR = "harnesses"
 HARNESS_LABEL = "io.github.sigormatt.harness-bench.harness"  # harness.yml labels each image with its harness id
@@ -209,17 +213,44 @@ def read_pins_file(path: Path) -> dict:
     return check_pins(load_json(Path(path), Path(path).name))
 
 
-def registry_entry(harness: dict, image: str, digest: str, build_sha: str) -> dict:
+def registry_entry(harness: dict, image: str, digest: str, build_sha: str, task_base: str) -> dict:
     return {"id": harness["id"], "version": harness["version"], "image": image, "config_digest": digest,
-            "entrypoint": harness["entrypoint"], "homepage": harness["homepage"], "build_commit": build_sha}
+            "entrypoint": harness["entrypoint"], "homepage": harness["homepage"], "build_commit": build_sha,
+            "task_base": task_base}
 
 
 def entry_at(git: Git, commit: str, harness_id: str, image: str, scratch: Path) -> dict:
     """The registry entry for image, built from harness_id's adapter at commit. scratch must be a new directory."""
     sha = git.out("rev-parse", "--verify", f"{commit}^{{commit}}")
+    try:
+        task_base = task_base_at(git, sha)["image"]
+    except ReleaseError as exc:
+        raise ReleaseError(f"the build commit {sha} pins no task base an image could be built on ({exc})") from None
     git.export(sha, [adapter_path(harness_id)], Path(scratch))
     adapter = Path(scratch) / adapter_path(harness_id)
-    return registry_entry(load_adapter(adapter, harness_id), image, config_digest(adapter), sha)
+    return registry_entry(load_adapter(adapter, harness_id), image, config_digest(adapter), sha, task_base)
+
+
+def current_task_base(git: Git, commit: str = "HEAD") -> str:
+    """The image task-base.json pins at commit, if its build files have not changed since its build commit."""
+    try:
+        document = task_base_at(git, commit)
+    except ReleaseError as exc:
+        raise ReleaseError(f"{commit} pins no task base ({exc})") from None
+    check_build_files_unchanged(git, document["build_commit"], commit)
+    return document["image"]
+
+
+def check_task_base_current(git: Git, entry: dict, commit: str = "HEAD") -> str:
+    """The entry's image was built on the task base task-base.json pins at commit. Returns that task base.
+
+    Raises ReleaseError, so an image built on an earlier task base is built again.
+    """
+    current = task_base_at(git, commit)["image"]
+    if entry.get("task_base") != current:
+        raise ReleaseError(f"registry entry {entry.get('id')!r} was built on the task base {entry.get('task_base')}, "
+                           f"but {TASK_BASE_FILE} now pins {current}: run harness.yml again")
+    return current
 
 
 def adapter_tree(git: Git, commit: str, harness_id: str) -> str:
@@ -264,16 +295,23 @@ def verify_commands(entry: dict) -> list[list[str]]:
     ]
 
 
-def check_pulled_image(docker, entry: dict, scratch: Path) -> None:
-    """The entry's image, pulled: labelled with its id, no ENTRYPOINT, and /hb/config whose digest is config_digest.
+def inspect_image(docker, image: str):
+    """`docker image inspect` of a pulled image, run by docker (hb.release.AnonymousDocker)."""
+    try:
+        return json.loads(docker.run(["docker", "image", "inspect", image], capture=True))
+    except ValueError:
+        raise ReleaseError(f"docker image inspect {image} did not give JSON") from None
+
+
+def check_pulled_image(docker, entry: dict, scratch: Path, base_inspect) -> None:
+    """The entry's image, pulled: labelled with its id, no ENTRYPOINT, built on the task base whose
+    `docker image inspect` is base_inspect, and /hb/config whose digest is config_digest.
 
     docker runs commands (hb.release.AnonymousDocker). scratch must be a new directory.
     """
-    try:
-        inspect = json.loads(docker.run(["docker", "image", "inspect", entry["image"]], capture=True))
-    except ValueError:
-        raise ReleaseError(f"docker image inspect {entry['image']} did not give JSON") from None
+    inspect = inspect_image(docker, entry["image"])
     check_image_config(inspect, entry["id"])
+    check_built_on(inspect, base_inspect)
     container = docker.run(["docker", "create", entry["image"], "/hb-never-run"], capture=True).decode().strip()
     try:
         # --follow-link resolves a symlink at /hb/config inside the image, not on this machine.

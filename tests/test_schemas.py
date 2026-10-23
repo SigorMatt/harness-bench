@@ -23,6 +23,7 @@ def load(path):
     ("suite", EXAMPLES / "suite/suite.json"),
     ("task", EXAMPLES / "suite/tasks/fix-pagination-off-by-one/task.json"),
     ("registry", EXAMPLES / "registry.json"),
+    ("task-base", EXAMPLES / "task-base.json"),
     ("harness", EXAMPLES.parent / "harnesses/baseline/harness.json"),
     ("prices", EXAMPLES / "prices.json"),
     ("cohort", EXAMPLES / "cohort.json"),
@@ -45,6 +46,11 @@ def test_every_gateway_record_matches_its_schema():
 
 @pytest.mark.parametrize("schema,path,change", [
     ("cohort", EXAMPLES / "cohort.json", lambda d: d["runtime"].update(network="host")),
+    ("cohort", EXAMPLES / "cohort.json", lambda d: d["runtime"].pop("task_base")),
+    ("suite", EXAMPLES / "suite/suite.json", lambda d: d["runtime"].pop("task_base")),
+    ("suite", EXAMPLES / "suite/suite.json", lambda d: d["runtime"].update(task_base="ghcr.io/x/y:latest")),
+    ("task-base", EXAMPLES / "task-base.json", lambda d: d.update(image="ghcr.io/sigormatt/hb-toolkit@sha256:"
+                                                                  + "1" * 64)),
     ("cohort", EXAMPLES / "cohort.json", lambda d: d["budget"].update(total_tokens=1.5)),
     ("entry", EXAMPLES / "entry.json", lambda d: d["harness"].update(image="ghcr.io/sigormatt/h:latest")),
     ("lifecycle", BUNDLE / "reps/1/lifecycle.json", lambda d: d.update(termination="infra_error")),

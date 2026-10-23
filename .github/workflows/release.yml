@@ -59,9 +59,10 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}  # passed as data, never interpolated into the script
         run: |
-          # Refuses a malformed version, a .gitattributes file, a missing suite or
-          # registry, anything that fails its schema, a suite plan would refuse, a
-          # task whose repo, instruction, probe or checks are not there, an ignore
+          # Refuses a malformed version, a .gitattributes file, a missing suite,
+          # registry or task-base.json, anything that fails its schema, a suite or
+          # registry entry that names another task base, a suite plan would refuse,
+          # a task whose repo, instruction, probe or checks are not there, an ignore
           # file at the suite's root, and suite paths Windows or a case-insensitive
           # file system would not keep as they are.
           python3 scripts/release.py inputs --version "$VERSION"
@@ -161,12 +162,21 @@ jobs:
           if [ "$status" -eq 0 ]; then echo "::error::the tag $VERSION already exists"; exit 1; fi
           if [ "$status" -ne 2 ]; then echo "::error::cannot list the tags (git exit status $status)"; exit 1; fi
 
+      - name: Verify the task base
+        env:
+          GH_TOKEN: ${{ github.token }}  # gh reads the attestations through GitHub's API
+        run: |
+          # task-base.json pins an image built from the build files as they are here, it pulls
+          # anonymously, and task-base.yml built it on main (spec §6.5).
+          python3 scripts/task_base.py verify
+
       - name: Verify the registry's harness images
         env:
           GH_TOKEN: ${{ github.token }}  # gh reads the attestations through GitHub's API
         run: |
-          # Every registry entry is what its build commit says, its image pulls anonymously,
-          # and harness.yml built it from that commit on main (spec §6.4).
+          # Every registry entry is what its build commit says and was built on the pinned task
+          # base, its image pulls anonymously, starts with the task base's layers, and harness.yml
+          # built it from that commit on main (spec §6.4).
           python3 scripts/harness.py verify
 
       - name: Download the images

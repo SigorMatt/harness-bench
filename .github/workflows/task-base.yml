@@ -10,7 +10,10 @@
 #   git switch --create pin-task-base origin/main
 #   python3 scripts/task_base.py pin task-base-pins.json
 #   python3 scripts/task_base.py verify
-#   git add task-base.json && git commit --message "Pin the task base built from <sha>"
+#   git commit --all --message "Pin the task base built from <sha>"
+#
+# pin refuses a dirty tree, so --all stages exactly what it wrote: task-base.json
+# and, once there is one, the suite it re-pins (a new task base is a new cohort).
 #
 # The first image lands in a private GHCR package: make it public first, or
 # verify cannot pull it.
@@ -178,7 +181,7 @@ jobs:
             echo "git switch --create pin-task-base origin/main"
             echo "python3 scripts/task_base.py pin task-base-pins.json"
             echo "python3 scripts/task_base.py verify"
-            echo "git add task-base.json && git commit --message 'Pin the task base built from ${GITHUB_SHA:0:12}'"
+            echo "git commit --all --message 'Pin the task base built from ${GITHUB_SHA:0:12}'"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 

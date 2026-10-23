@@ -5,22 +5,25 @@ Run by .github/workflows/harness.yml:
   inputs --harness ID       (unprivileged job) check the adapter, harness.json against its
                             schema; needs jsonschema
   names --harness ID --build-sha SHA
-                            (build and image jobs, standard library only) print the image name, tag and
-                            adapter directory as key=value lines for $GITHUB_OUTPUT
-  check-image --harness ID --copied DIR --inspect FILE
+                            (build and image jobs, standard library only) print the image name, tag,
+                            adapter directory and the task base task-base.json pins as key=value
+                            lines for $GITHUB_OUTPUT
+  check-image --harness ID --copied DIR --inspect FILE --base-inspect FILE
                             (image job) DIR is /hb copied out of the built image, FILE its
                             `docker image inspect`: /hb/config must be the build commit's config/,
                             every /hb file the entrypoint names must be there, the image must
-                            be labelled with the id and have no ENTRYPOINT
+                            be labelled with the id, have no ENTRYPOINT, and start with the layers
+                            of the pinned task base, whose `docker image inspect` is --base-inspect
   pins --harness ID --build-sha SHA --image REF --out FILE
                             (image job) write harness-pins.json
 
 Run by a maintainer, in a full clone at main with the gh CLI logged in:
   pin harness-pins.json     add or replace the harness's registry entry in registry.json
   verify [ID ...]           check registry entries against their build commits (all when no
-                            id is given), then pull each image anonymously, verify its
-                            provenance and check its label, entrypoint and /hb/config;
-                            --offline checks the entries only
+                            id is given) and that they were built on the task base pinned now,
+                            then pull that task base and each image anonymously, verify each
+                            image's provenance and check its label, entrypoint, task base layers
+                            and /hb/config; --offline checks the entries only
 
 The release workflow's images job runs `verify` too, for every registry entry (spec §6.3).
 """
@@ -38,10 +41,11 @@ sys.path.insert(0, str(ROOT))
 
 from hb.harness import (  # noqa: E402
     adapter_path, adapter_tree, check_entry, check_image_config, check_image_files, check_inputs, check_pins,
-    check_pulled_image, entry_at, harness_repository, image_tag, load_adapter, pin_registry, read_pins_file,
-    verify_commands,
+    check_pulled_image, check_task_base_current, current_task_base, entry_at, harness_repository, image_tag,
+    inspect_image, load_adapter, pin_registry, read_pins_file, verify_commands,
 )
 from hb.release import GIT_SHA, REGISTRY_FILE, AnonymousDocker, Git, ReleaseError, load_json  # noqa: E402
+from hb.taskbase import TASK_BASE_FILE, check_built_on, pulled_as, read_task_base, task_base_at  # noqa: E402
 
 
 def _print_lines(values: dict) -> None:
@@ -62,7 +66,8 @@ def cmd_names(args) -> None:
         raise ReleaseError(f"{attributes}: a .gitattributes file can make the checkout the image is built from "
                            "differ from the committed files the registry entry is computed from")
     _print_lines({"id": harness["id"], "version": harness["version"], "dir": adapter_path(args.harness),
-                  "image": harness_repository(args.harness), "tag": image_tag(harness["version"], args.build_sha)})
+                  "image": harness_repository(args.harness), "tag": image_tag(harness["version"], args.build_sha),
+                  "task_base": read_task_base(args.root)["image"]})
 
 
 def cmd_check_image(args) -> None:
@@ -71,9 +76,15 @@ def cmd_check_image(args) -> None:
         Git(args.root).export("HEAD", [adapter_path(args.harness)], Path(scratch))
         adapter = Path(scratch) / adapter_path(args.harness)
         check_image_files(adapter, args.copied, load_adapter(adapter, args.harness))
-    check_image_config(load_json(args.inspect, "the image inspection"), args.harness)
+    inspect = load_json(args.inspect, "the image inspection")
+    check_image_config(inspect, args.harness)
+    task_base = task_base_at(Git(args.root), "HEAD")["image"]
+    base_inspect = load_json(args.base_inspect, "the task base inspection")
+    if not pulled_as(base_inspect, task_base):
+        raise ReleaseError(f"--base-inspect is not the inspection of the task base {TASK_BASE_FILE} pins, {task_base}")
+    check_built_on(inspect, base_inspect)
     print(f"the image holds the committed {adapter_path(args.harness)}/config/ at /hb/config and the entrypoint's "
-          f"files, is labelled {args.harness} and has no ENTRYPOINT of its own")
+          f"files, is labelled {args.harness}, has no ENTRYPOINT of its own and is built on {task_base}")
 
 
 def cmd_pins(args) -> None:
@@ -97,6 +108,8 @@ def cmd_pin(args) -> None:
                            "run harness.yml again from main")
     with tempfile.TemporaryDirectory() as scratch:
         entry = entry_at(git, build, harness_id, pins["image"], Path(scratch))
+    current_task_base(git)  # not a pin whose build files have changed since
+    check_task_base_current(git, entry)
     registry = pin_registry(_load_registry(args.root), entry)
     try:
         from jsonschema import ValidationError
@@ -128,22 +141,29 @@ def cmd_verify(args) -> None:
             raise ReleaseError(f"{REGISTRY_FILE} has no entry for {', '.join(missing)}")
         entries = [by_id[i] for i in ids]
     git = Git(args.root)
+    task_base = current_task_base(git)
     for entry in entries:
         if not isinstance(entry, dict):
             raise ReleaseError(f"{REGISTRY_FILE} has an entry that is not an object")
         with tempfile.TemporaryDirectory() as scratch:
             check_entry(git, entry, Path(scratch))
-        print(f"{entry['id']}: the entry is what its build commit {entry['build_commit']} says")
+        check_task_base_current(git, entry)
+        print(f"{entry['id']}: the entry is what its build commit {entry['build_commit']} says, "
+              f"built on the task base {TASK_BASE_FILE} pins")
     if args.offline:
         return
     with AnonymousDocker() as docker:
+        # Its provenance is scripts/task_base.py verify's; here it is what the images must start from.
+        docker.run(["docker", "pull", "--quiet", task_base])
+        base_inspect = inspect_image(docker, task_base)
         for entry in entries:
             for command in verify_commands(entry):
                 docker.run(command)
             with tempfile.TemporaryDirectory() as scratch:
-                check_pulled_image(docker, entry, Path(scratch))
+                check_pulled_image(docker, entry, Path(scratch), base_inspect)
             print(f"{entry['id']}: {entry['image']} pulls anonymously, was built by harness.yml from "
-                  f"{entry['build_commit']} on main, and holds config_digest's /hb/config")
+                  f"{entry['build_commit']} on main, starts with the task base's layers, and holds "
+                  f"config_digest's /hb/config")
 
 
 def main(argv=None) -> int:
@@ -161,6 +181,7 @@ def main(argv=None) -> int:
     check_image.add_argument("--harness", required=True)
     check_image.add_argument("--copied", type=Path, required=True)
     check_image.add_argument("--inspect", type=Path, required=True)
+    check_image.add_argument("--base-inspect", type=Path, required=True)
     check_image.set_defaults(run=cmd_check_image)
     pins = commands.add_parser("pins")
     for name in ("--harness", "--build-sha", "--image", "--out"):

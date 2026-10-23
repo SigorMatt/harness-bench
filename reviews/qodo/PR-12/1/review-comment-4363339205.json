@@ -1,0 +1,69 @@
+{
+  "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4363339205",
+  "pull_request_review_id": 5633301924,
+  "id": 4363339205,
+  "node_id": "PRRC_kwDOVO0AUs8AAAABBBNFxQ",
+  "diff_hunk": "@@ -55,10 +59,16 @@ def cmd_pin(args) -> None:\n         raise ReleaseError(\"the working tree has uncommitted changes\")\n     check_build_files_unchanged(git, pins[\"build_sha\"])\n     document = task_base_document(pins)\n+    suite = args.root / SUITE_FILE\n+    suite_text = pin_suite_text(suite.read_text(encoding=\"utf-8\"), document) if suite.is_file() else None\n     (args.root / TASK_BASE_FILE).write_bytes((json.dumps(document, indent=2) + \"\\n\").encode(\"utf-8\"))\n-    print(f\"{TASK_BASE_FILE} now pins {document['image']}, built from {document['build_commit']}. Next:\\n\"\n+    changed = [TASK_BASE_FILE]\n+    if suite_text is not None:\n+        suite.write_bytes(suite_text.encode(\"utf-8\"))\n+        changed.append(SUITE_FILE)  # a new task base is a new cohort: the suite names it (spec §6.5)",
+  "path": "scripts/task_base.py",
+  "commit_id": "6b5b3fe2f685b5bdae1ca068e5c184ada2536810",
+  "original_commit_id": "6b5b3fe2f685b5bdae1ca068e5c184ada2536810",
+  "user": {
+    "login": "qodo-code-review[bot]",
+    "id": 151058649,
+    "node_id": "BOT_kgDOCQD42Q",
+    "avatar_url": "https://avatars.githubusercontent.com/in/484649?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/qodo-code-review%5Bbot%5D",
+    "html_url": "https://github.com/apps/qodo-code-review",
+    "followers_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/followers",
+    "following_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/following{/other_user}",
+    "gists_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/subscriptions",
+    "organizations_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/orgs",
+    "repos_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/repos",
+    "events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/qodo-code-review%5Bbot%5D/received_events",
+    "type": "Bot",
+    "user_view_type": "public",
+    "site_admin": false
+  },
+  "body": "<img src=\"https://img.shields.io/badge/Medium-634FD1?style=flat-square\" height=\"20px\" alt=\"Remediation recommended\">\n\n1\\. Task-base updates can leave the suite stale <code>🐞 Bug</code> <code>≡ Correctness</code>\n\n<pre>\n<b><i>cmd_pin</i></b> now rewrites the suite pin when a suite exists, but the task-base workflow summary still\ninstructs maintainers to stage only <b><i>task-base.json</i></b>. Following that command commits the new image\npin without the suite change, and verification of the resulting checkout rejects the old\n<b><i>runtime.task_base</i></b>.\n</pre>\n\n\n<details>\n<summary><strong>Agent Prompt</strong></summary>\n\n```\n## Issue description\nThe task-base pin command now changes the suite, but the workflow summary tells maintainers to commit only the pin file.\n## Fix Focus Areas\n- .github/workflows/task-base.yml[175-182]\n- scripts/task_base.py[62-71]\n## Recommended Fix\nUpdate the workflow summary to stage the suite when it exists, consistently with the files reported by `cmd_pin`.\n```\n\n<code>ⓘ Copy this prompt and use it to remediate the issue with your preferred AI generation tools</code>\n</details>\n\n[Dismiss ↗](https://app.qodo.ai/findings/30e10e5e-5eae-406d-b43f-facd8b72dcbc?action=dismiss&origin=git) | [View ↗](https://app.qodo.ai/findings/30e10e5e-5eae-406d-b43f-facd8b72dcbc)",
+  "created_at": "2026-10-23T19:14:38Z",
+  "updated_at": "2026-10-23T19:14:38Z",
+  "html_url": "https://github.com/SigorMatt/harness-bench/pull/12#discussion_r4363339205",
+  "pull_request_url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/12",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4363339205"
+    },
+    "html": {
+      "href": "https://github.com/SigorMatt/harness-bench/pull/12#discussion_r4363339205"
+    },
+    "pull_request": {
+      "href": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/12"
+    }
+  },
+  "reactions": {
+    "url": "https://api.github.com/repos/SigorMatt/harness-bench/pulls/comments/4363339205/reactions",
+    "total_count": 0,
+    "+1": 0,
+    "-1": 0,
+    "laugh": 0,
+    "hooray": 0,
+    "confused": 0,
+    "heart": 0,
+    "rocket": 0,
+    "eyes": 0
+  },
+  "start_line": 66,
+  "original_start_line": 66,
+  "start_side": "RIGHT",
+  "line": 68,
+  "original_line": 68,
+  "side": "RIGHT",
+  "author_association": "NONE",
+  "original_position": 44,
+  "position": 44,
+  "subject_type": "line"
+}

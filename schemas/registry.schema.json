@@ -48,6 +48,10 @@
           "build_commit": {
             "description": "The commit of this repository that .github/workflows/harness.yml built the image from (spec §6.4). Not part of the entry key.",
             "$ref": "urn:hb:schema:common:1#/$defs/git_sha"
+          },
+          "task_base": {
+            "description": "The task base the image was built on, as the build commit's task-base.json pins it (spec §6.5). Not part of the entry key: the suite pins the same image, so it is in the cohort key.",
+            "$ref": "urn:hb:schema:common:1#/$defs/image_ref"
           }
         }
       }
