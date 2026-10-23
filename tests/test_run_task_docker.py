@@ -4,6 +4,10 @@ Opt-in: set HB_DOCKER_TESTS=1. HB_TEST_BASE_IMAGE names the base for the
 toolkit image (python3 3.12+; default python:3.12-slim) and HB_TEST_HARNESS_BASE
 the base for the stub harness (default: the same). The baseline harness
 (harnesses/baseline) is built on its own pinned base, or on HB_TEST_BASELINE_BASE.
+The task base (docker/task-base.Dockerfile) is built on its pinned base, with
+git from Debian's archive and pytest from PyPI. On a machine that cannot reach
+them, HB_TEST_TASK_BASE names an image to use as the task base instead, and the
+test that builds it is skipped.
 
 What runs: the toolkit image built from docker/toolkit.Dockerfile (gateway,
 helper and probe sandbox), a stub harness image (tests/docker/stub_harness.py)
@@ -23,6 +27,7 @@ import http.server
 import json
 import os
 import queue
+import re
 import shutil
 import socket
 import ssl
@@ -60,7 +65,8 @@ def build(context: Path, dockerfile: Path, tag: str, **build_args) -> str:
     argv = ["docker", "build", "--quiet", "--file", str(dockerfile), "--tag", tag]
     for key, value in build_args.items():
         argv += ["--build-arg", f"{key}={value}"]
-    sh(*argv, str(context))
+    proc = subprocess.run([*argv, str(context)], capture_output=True, text=True, check=False)
+    assert proc.returncode == 0, f"{' '.join(argv)} failed:\n{proc.stdout[-4000:]}{proc.stderr[-4000:]}"
     return sh("docker", "image", "inspect", "--format", "{{.Id}}", tag)
 
 
@@ -507,6 +513,28 @@ def test_toolkit_build_refuses_a_missing_registry_file(env):
     output = proc.stdout + proc.stderr
     assert proc.returncode != 0
     assert "IsADirectoryError" in output and "/opt/hb/registry.json" in output
+
+
+@pytest.mark.skipif(bool(os.environ.get("HB_TEST_TASK_BASE")),
+                    reason="HB_TEST_TASK_BASE names a stand-in: this machine cannot build the task base")
+def test_the_task_base_works_as_task_base_yml_tries_it():
+    """docker/task-base.Dockerfile built as task-base.yml builds it (docker/ is the context), then tried with
+    the workflow's own lines: the harness container's user, a read-only root and no network."""
+    tag = "hb-test/task-base:latest"
+    build(ROOT / "docker", ROOT / "docker" / "task-base.Dockerfile", tag)
+    lines = [line.strip() for line in (ROOT / ".github" / "workflows" / "task-base.yml").read_text().splitlines()]
+    start = next(i for i, line in enumerate(lines) if line.startswith("profile=("))
+    stop = next(i for i in range(start, len(lines)) if lines[i].endswith("git --version"))
+    proc = subprocess.run(["bash", "-euo", "pipefail", "-c", "\n".join(lines[start:stop + 1])], capture_output=True,
+                          text=True, timeout=300, check=False,
+                          env={**os.environ, "IMAGE": "hb-test/task-base", "TAG": "latest"})
+    assert proc.returncode == 0, proc.stderr
+    pytest_pin = re.search(r"^pytest==(\S+) ", (ROOT / "docker" / "task-base-requirements.txt").read_text(),
+                           re.MULTILINE).group(1)
+    assert f"pytest {pytest_pin}" in proc.stdout
+    assert "1 passed" in proc.stdout                         # a test run as the harness user
+    assert "\nhb\nharness-bench agent\n" in proc.stdout   # whoami, then the author of a commit
+    assert "git version" in proc.stdout
 
 
 @pytest.fixture(scope="session")
