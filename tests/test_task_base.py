@@ -475,6 +475,15 @@ def test_pin_sets_the_suites_task_base_and_nothing_else(repo):
     assert proc.returncode == 0 and "runtime.task_base is the same image" in proc.stdout, proc.stderr
 
 
+def test_the_workflows_commit_steps_take_the_suite_with_the_pin():
+    # pin may rewrite the suite as well as task-base.json; a step staging only
+    # task-base.json would leave the suite naming the old task base
+    steps = [line for line in WORKFLOW.read_text().splitlines() if "git commit" in line]
+    assert len(steps) == 2
+    for line in steps:
+        assert "git commit --all " in line and "git add" not in line, line
+
+
 def difflib_lines(before: str, after: str) -> list[str]:
     import difflib
     return [line.rstrip("\n") for line in difflib.unified_diff(before.splitlines(True), after.splitlines(True), n=0)
