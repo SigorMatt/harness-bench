@@ -1,0 +1,18 @@
+{
+  "schema": "hb/registry/1",
+  "harnesses": [
+    {
+      "id": "baseline",
+      "version": "0.1.0",
+      "image": "ghcr.io/sigormatt/hb-harness-baseline@sha256:428c39f200a5caeca41ba1d5faa16f03df3dfea5ecbcec79c9d6a159091f7222",
+      "config_digest": "sha256:3851cab27a467b3489fd1a21bbedec5baf8ddda4d3e1a4a7b1aa17c01406a256",
+      "entrypoint": [
+        "python3",
+        "/hb/agent.py"
+      ],
+      "homepage": "https://github.com/SigorMatt/harness-bench/tree/main/harnesses/baseline",
+      "build_commit": "24c0055c9d83531cb4c1fc6cbf77ad2763fbf9fc",
+      "task_base": "ghcr.io/sigormatt/hb-task-base@sha256:4bc422b355b80efc39024c9798eb6f960e84401523bca97133a229dbedb84cd4"
+    }
+  ]
+}
