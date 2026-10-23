@@ -20,12 +20,13 @@ pipeline are complete; there is no release yet.** This repository contains the
 result-bundle spec, JSON schemas, a tested reference library, the model gateway
 (`hb/gateway.py`), the orchestrator that runs every rep of a task in Docker and
 grades it in a sandbox (`hb/orchestrator.py`), the plan and seal commands
-(`hb/plan.py`, `hb/seal.py`), the release and harness image tooling
-(`hb/release.py`, `hb/harness.py` and their scripts), the reference `baseline`
-harness (`harnesses/baseline`), the image Dockerfiles, a generated example run
-and the workflows. Not yet built: the suite content (`suites/py-maint/`), the
-registry (`registry.json`) with the first harness images, more harness
-adapters, and the results site.
+(`hb/plan.py`, `hb/seal.py`), the release, harness image and task base tooling
+(`hb/release.py`, `hb/harness.py`, `hb/taskbase.py` and their scripts), the
+reference `baseline` harness (`harnesses/baseline`), the image Dockerfiles, a
+generated example run and the workflows. Not yet built: the pin of the first task
+base (`task-base.json`), the image every harness image starts from; the suite
+content (`suites/py-maint/`); the registry (`registry.json`) with the first
+harness images; more harness adapters; and the results site.
 
 ## How results stay fair
 
@@ -40,16 +41,18 @@ signatures, compares values for equality and recomputes. See
 docs/spec/result-bundle.md   the spec
 schemas/                     JSON Schemas (draft 2020-12)
 hb/                          reference library, model gateway, orchestrator and toolkit CLI
-docker/                      toolkit and suite image Dockerfiles
+docker/                      toolkit, suite and task base image Dockerfiles
 harnesses/<id>/              harness adapters: harness.json, Dockerfile, config/ (spec §6.4)
 examples/                    a suite with one task, a registry, and a generated run
 scripts/make_examples.py     regenerates examples; --check fails if they are stale
 scripts/release.py           release steps: pin the images, verify a release commit, release table entry
 scripts/harness.py           harness image steps: register a built image, verify registry entries
+scripts/task_base.py         task base steps: pin a built image in task-base.json, verify it
 tests/                       functional tests
 .github/workflows/bench.yml  reusable benchmark workflow (image pins are placeholders on main)
 .github/workflows/release.yml  builds, checks, publishes and attests a release's images
 .github/workflows/harness.yml  builds, checks, publishes and attests one harness adapter image
+.github/workflows/task-base.yml  builds, tries, publishes and attests the task base (spec §6.5)
 templates/                   caller workflow for submitters; intake for the results repo
 ```
 
@@ -86,6 +89,15 @@ model, no interactive prompts, no telemetry). Once it is merged, a maintainer st
 the built image in `registry.json` with `scripts/harness.py pin` and `verify`,
 in a second pull request. The workflow run's summary lists the exact commands;
 [spec §6.4](docs/spec/result-bundle.md) explains them.
+
+## The task base
+
+Every harness image starts from the task base (`docker/task-base.Dockerfile`):
+the toolkit's Python, git and pytest, so every agent has the same tools. After
+a change to its build files, a maintainer starts the `task-base` workflow on
+main and pins the built image in `task-base.json` with `scripts/task_base.py
+pin` and `verify`, in a pull request. The workflow run's summary lists the exact
+commands; [spec §6.5](docs/spec/result-bundle.md) explains them.
 
 ## Releasing
 

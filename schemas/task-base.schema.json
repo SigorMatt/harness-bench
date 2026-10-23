@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:hb:schema:task-base:1",
+  "title": "Task base pin (task-base.json)",
+  "description": "The task base (spec §6.5): the image every harness image starts from, so every agent has the same Python, git and pytest. Written by scripts/task_base.py pin from a task-base.yml run, in a pull request.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "image", "build_commit"],
+  "properties": {
+    "schema": {
+      "const": "hb/task-base/1"
+    },
+    "image": {
+      "description": "The image task-base.yml built and attested, pinned by digest.",
+      "type": "string",
+      "pattern": "^ghcr\\.io/sigormatt/hb-task-base@sha256:[0-9a-f]{64}$"
+    },
+    "build_commit": {
+      "description": "The commit of this repository that task-base.yml built the image from.",
+      "$ref": "urn:hb:schema:common:1#/$defs/git_sha"
+    }
+  }
+}

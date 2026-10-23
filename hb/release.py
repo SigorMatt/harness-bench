@@ -44,6 +44,7 @@ REGISTRY_FILE = "registry.json"       # what the toolkit image holds as its regi
 IMAGE_PREFIX = "ghcr.io/sigormatt/"
 TOOLKIT_REPOSITORY = IMAGE_PREFIX + "hb-toolkit"
 SUITE_REPOSITORY_PREFIX = IMAGE_PREFIX + "hb-suite-"
+TASK_BASE_REPOSITORY = IMAGE_PREFIX + "hb-task-base"  # the image every harness image starts from (spec §6.5)
 PLACEHOLDER_DIGEST = "sha256:" + "0" * 64
 PINS_FILE_KEYS = ("version", "build_sha", "toolkit_image", "suite_image")
 REGULAR_MODES = ("100644", "100755")

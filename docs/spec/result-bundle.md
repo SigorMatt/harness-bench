@@ -714,6 +714,77 @@ on replies, commands and their output. It gives the leaderboard a floor this
 project controls and lets the whole chain be tested without anyone else's
 harness.
 
+### 6.5 Task base
+
+A harness image is the agent's whole environment. Left to each adapter, an
+image built on Node would have no Python and the baseline's would have no
+pytest, so two results would differ in the agent's tools as well as in the
+harness. The task base is the image every harness image starts from.
+`docker/task-base.Dockerfile` builds it:
+
+- Python 3.12 from the toolkit's pinned image, the interpreter probes run on
+  (§7);
+- git and patch from Debian's archive, with a system-wide git identity and
+  `main` as the default branch, so an agent can commit;
+- pytest and its dependencies from `docker/task-base-requirements.txt`, which
+  pins every wheel by version and sha256 (`pip install --require-hashes
+  --only-binary :all:`); the image keeps the file at
+  `/opt/hb/task-base-requirements.txt`;
+- an account for the harness container's user (10001, home `/tmp`), so tools
+  that look up the current user find one.
+
+The build is not bit-for-bit reproducible, so what is pinned is the image built
+here, by digest.
+
+`.github/workflows/task-base.yml` runs when a maintainer starts it, from main
+only, in two jobs.
+
+- The **build** job has no write permission. It builds the image from the build
+  commit and tries it as a harness container runs (§6): as user 10001, with a
+  read-only root, no capabilities and no network, it runs a test with pytest,
+  looks up its user and makes a git commit. It hands the image on as a workflow
+  artifact.
+- The **image** job can push and attest, and builds nothing. It loads the image
+  and checks that it is the one the build job built. It then pushes it to GHCR
+  as `ghcr.io/sigormatt/hb-task-base` (tagged with the build commit's first
+  twelve hex digits), pulls it back by digest, attests it with build provenance
+  and uploads `task-base-pins.json` (the image and the build commit).
+
+As with harness images, the build commit may hold no `.gitattributes` file, and
+the first image lands in a private GHCR package, which a maintainer makes
+public once.
+
+A maintainer then pins the image in `task-base.json`
+([`schemas/task-base.schema.json`](../../schemas/task-base.schema.json)), in a
+pull request. `scripts/task_base.py pin` refuses unless the build files
+(`docker/task-base.Dockerfile` and `docker/task-base-requirements.txt`) at main
+are the same git objects, with the same modes, as at the build commit.
+`scripts/task_base.py verify` checks that again, so wherever it runs, a pin that
+has outlived the files it was built from is refused. It then pulls the image
+anonymously and runs `gh attestation verify oci://<image>
+--repo SigorMatt/harness-bench --signer-workflow
+SigorMatt/harness-bench/.github/workflows/task-base.yml --source-digest <build
+commit> --source-ref refs/heads/main --deny-self-hosted-runners`.
+
+Whatever a harness adds on top of the task base, such as its own runtime and
+tools, is part of the harness and reviewed with its adapter (§6.4).
+
+**Not yet wired in.** These come with the suite (`suites/py-maint/`):
+
+- The suite will pin the same image in `runtime.task_base`, which puts it in
+  the cohort key.
+- Every harness image will be built on the pinned task base. `harness.yml`
+  passes it as the `TASK_BASE` build argument. The image job pulls it by digest
+  itself, before it logs in to the registry, and requires the harness image's
+  first layers to be the task base's: the uncompressed layer digests of the
+  image configuration (`rootfs.diff_ids`, which `docker image inspect` shows as
+  `RootFS.Layers`).
+- Each registry entry will record the task base its build commit pinned, and
+  `verify` will check the pulled image's layers in the same way.
+- The release workflow's images job will run `scripts/task_base.py verify`, so
+  a release refuses a pin whose build files have changed since; a pull request
+  cannot, because a change to them is built only once it is on main.
+
 ## 7. Grading
 
 The same function, `hb.grade.grade_rep`, runs inside the run (advisory) and at
@@ -922,5 +993,6 @@ cohort.
 | `hb/metrics.py` | usage and cost from gateway records |
 | `hb/accept.py` | expected files, attestation commands, run acceptance, attempt rules, dedup key |
 | `hb/harness.py` | harness images: adapters, the registry entry from its build commit, its checks (`scripts/harness.py`, `.github/workflows/harness.yml`) |
+| `hb/taskbase.py` | the task base: its pins, `task-base.json` and its checks against the build files, the commands that verify it (`scripts/task_base.py`, `.github/workflows/task-base.yml`) |
 | `hb/release.py` | releases: the release inputs, `bench.yml`'s pins, the release commit's checks, the release table entry (`scripts/release.py`, `.github/workflows/release.yml`) |
 | `hb/schemas.py` | schema loading and validation |

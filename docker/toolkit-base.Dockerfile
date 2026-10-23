@@ -6,6 +6,9 @@
 #
 # Both images are pinned by digest (their multi-platform index), so CI and the
 # release workflow build on exactly the same base; change them by pull request.
+# docker/task-base.Dockerfile pins the same Python image (tests/test_task_base.py
+# checks they are equal), so the task base agents work in has the interpreter
+# probes run on; changing that pin in either is a new task base to build and pin.
 # The build is not bit-for-bit reproducible (git comes from Debian's archive at
 # build time, and images record build timestamps): what a release pins is the
 # toolkit image it built and attested, by digest (spec §6.3).
