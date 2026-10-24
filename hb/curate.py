@@ -102,7 +102,7 @@ def _curate(suite, suite_dir, entry, run_probe, workdir, problems):
             shutil.copytree(tree, copy, symlinks=True)
             runs.append(parse_observations(run_probe(task_dir / probe["program"], copy, task_dir / probe["inputs"],
                                                      probe["timeout_seconds"])))
-        if runs[0] != runs[1]:
+        if not strict_equal(runs[0], runs[1]):  # grading tells 1 from 1.0 and True, so this must too
             problems.append(f"the probe reports different observations on two runs over {name}")
         return runs[0]
 

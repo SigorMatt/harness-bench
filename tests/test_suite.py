@@ -168,6 +168,14 @@ def noisy_when_fixed(probes: Path) -> None:
     (lambda s: (s / TASK / "probes/probe.py").write_text(
         "import json, random, sys\njson.dump({'p1': {'ok': random.random()}}, sys.stdout)\n"),
      "different observations on two runs"),
+    (lambda s: (s / TASK / "probes/probe.py").write_text(
+        # 1 on one run and 1.0 on the next: equal to ==, not to strict_equal, which grading uses.
+        "import json, os, sys\n"
+        f"flag = {str(s / 'probe-ran')!r}\n"
+        "if os.path.exists(flag):\n    os.remove(flag)\n    value = 1.0\n"
+        "else:\n    open(flag, 'w').close()\n    value = 1\n"
+        "json.dump({'p1': {'ok': value}}, sys.stdout)\n"),
+     "different observations on two runs over the pristine repository"),
     (lambda s: shutil.copy(s / TASK / "repo/pager.py", s / TASK / "checks/solution/pager.py"),
      "changes nothing"),
     (lambda s: (s / TASK / "checks/solution/notes.txt").write_text("x\n"),
