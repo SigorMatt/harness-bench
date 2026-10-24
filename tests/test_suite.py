@@ -195,6 +195,10 @@ def noisy_when_fixed(probes: Path) -> None:
     (lambda s: (s / TASK / "checks/target.json").unlink(), "checks/target.json cannot be read as JSON"),
     (lambda s: shutil.rmtree(s / TASK / "checks/solution"), "is not a directory in the task directory"),
     (lambda s: noisy_when_fixed(s / TASK / "probes"), "two runs over the reference solution"),
+    (lambda s: os.symlink("/nonexistent", s / TASK / "checks/solution/dangling.py"),
+     "entries that are not regular files: dangling.py"),
+    (lambda s: os.symlink("pager.py", s / TASK / "checks/solution/alias.py"),
+     "entries that are not regular files: alias.py"),
 ])
 def test_curation_reports_a_task_that_breaks_a_rule(example, tmp_path, break_it, message):
     break_it(example)
@@ -211,6 +215,14 @@ def test_a_strict_scope_counts_against_the_solution_when_graded(example, tmp_pat
     found = problems(example, tmp_path / "curation")
     assert any("outside the allowed paths: README.md" in p for p in found), found
     assert any("graded as a rep, is not resolved" in p for p in found), found
+
+
+def test_ignored_files_in_the_reference_solution_are_not_part_of_it(example, tmp_path):
+    # The graded diff leaves out what the suite ignores, so curation must not count it as a change.
+    cache = example / TASK / "checks/solution/__pycache__"
+    cache.mkdir()
+    (cache / "pager.cpython-312.pyc").write_bytes(b"\0")
+    assert problems(example, tmp_path / "curation") == []
 
 
 def test_what_a_probe_writes_into_its_tree_is_not_part_of_the_reference_solution(example, tmp_path):

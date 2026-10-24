@@ -10,8 +10,9 @@ For every task of a suite, curate_task() checks:
   on the reference solution;
 - the pristine repository fails every target check and passes every
   preservation check, so the preservation expectations are what pristine does;
-- the reference solution (checks/solution, laid over the pristine repository)
-  changes at least one file, only within the task's allowed paths and none of
+- the reference solution (checks/solution, laid over the pristine repository
+  without the files the suite ignores) holds only regular files and changes at
+  least one file, only within the task's allowed paths and none of
   the suite's protected paths;
 - graded by hb.grade.grade_rep exactly as a rep is, from its workspace diff, the
   reference solution resolves the task.
@@ -115,9 +116,14 @@ def _curate(suite, suite_dir, entry, run_probe, workdir, problems):
                          if case not in seen or not strict_equal(seen[case], want))
         problems.append(f"the pristine repository fails preservation cases: {', '.join(failing)}")
 
+    # The solution is read as every other tree is, ignored files left out, so its changes are what
+    # the graded diff carries. A symlink or other non-regular entry is something no diff can carry.
+    dropped = materialize(solution, workdir / "solution", ignore)
+    if dropped:
+        problems.append(f"the reference solution holds entries that are not regular files: {', '.join(dropped)}")
     solved = workdir / "solved"
     shutil.copytree(pristine, solved)
-    shutil.copytree(solution, solved, dirs_exist_ok=True)
+    shutil.copytree(workdir / "solution", solved, dirs_exist_ok=True)
     changed = tree_changes(pristine, solved)
     if not changed:
         problems.append("the reference solution changes nothing")
