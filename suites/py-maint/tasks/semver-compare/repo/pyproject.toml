@@ -1,0 +1,10 @@
+[project]
+name = "semverlite"
+version = "0.3.0"
+description = "Parse and order semantic versions"
+readme = "README.md"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

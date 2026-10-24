@@ -1,0 +1,21 @@
+{
+  "p1": {"ok": [1, 2, 3, [], []]},
+  "p2": {"ok": [1, 0, 0, ["alpha", "1"], ["build", "5"]]},
+  "p3": {"error": "ValueError"},
+  "p4": {"error": "ValueError"},
+  "p5": {"error": "ValueError"},
+  "p6": {"ok": [2, 0, 0, [], []]},
+  "p7": {"ok": "1.0.0-rc.1+exp.sha.5114f85"},
+  "p8": {"ok": "1.5.0"},
+  "p9": {"ok": "1.4.8"},
+  "p10": {"error": "ValueError"},
+  "p11": {"ok": true},
+  "p12": {"error": "TypeError"},
+  "p13": {"error": "ValueError"},
+  "p14": {"ok": "3.1.4"},
+  "p15": {"error": "ValueError"},
+  "p16": {"error": "ValueError"},
+  "p17": {"ok": false},
+  "p18": {"ok": [0, 0, 0, ["0A", "is", "legal-ok"], []]},
+  "p19": {"ok": "1.0.0"}
+}

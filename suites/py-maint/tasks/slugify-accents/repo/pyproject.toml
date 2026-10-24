@@ -1,0 +1,9 @@
+[project]
+name = "textkit"
+version = "1.4.0"
+description = "Small text helpers for web pages"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

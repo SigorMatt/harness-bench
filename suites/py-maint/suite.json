@@ -1,0 +1,73 @@
+{
+  "schema": "hb/suite/1",
+  "id": "py-maint",
+  "version": "0.1.0",
+  "track": "stock",
+  "reps": 3,
+  "model": {
+    "provider": "nebius-token-factory",
+    "base_url": "https://api.tokenfactory.nebius.com/v1/",
+    "model_id": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+    "wire": "openai-chat-completions"
+  },
+  "runtime": {
+    "runner": "github-hosted/ubuntu-24.04/x64",
+    "harness_cpus_milli": 2000,
+    "harness_memory_mib": 8192,
+    "harness_pids": 512,
+    "network": "gateway-only",
+    "task_base": "ghcr.io/sigormatt/hb-task-base@sha256:4bc422b355b80efc39024c9798eb6f960e84401523bca97133a229dbedb84cd4"
+  },
+  "budget": {
+    "wall_seconds": 1200,
+    "total_tokens": 2000000,
+    "model_calls": 200
+  },
+  "infra": {
+    "upstream_retries": 3,
+    "max_reruns_per_rep": 2,
+    "max_rerun_permille": 50
+  },
+  "protected_paths": [
+    "tests/**",
+    "**/conftest.py",
+    "**/sitecustomize.py",
+    "**/usercustomize.py",
+    "**/*.pth"
+  ],
+  "ignore_paths": [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    ".pytest_cache/**"
+  ],
+  "tasks": [
+    {
+      "id": "envfile-values",
+      "category": "fix_from_report"
+    },
+    {
+      "id": "ledger-fx-report",
+      "category": "navigate_large_repo"
+    },
+    {
+      "id": "pricing-module",
+      "category": "preserve_refactor"
+    },
+    {
+      "id": "python312-imports",
+      "category": "build_repair"
+    },
+    {
+      "id": "semver-compare",
+      "category": "implement_to_spec"
+    },
+    {
+      "id": "slugify-accents",
+      "category": "fix_with_failing_test"
+    },
+    {
+      "id": "table-alignment",
+      "category": "restraint"
+    }
+  ]
+}

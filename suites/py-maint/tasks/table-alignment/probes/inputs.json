@@ -1,0 +1,24 @@
+{
+  "cases": [
+    {"id": "p1", "scenario": "render", "args": [["Name", "Role"], [["Ada", "engineer"], ["Grace", "admiral"]], null]},
+    {"id": "p2", "scenario": "render", "args": [["c"], [["ab"]], ["center"]]},
+    {"id": "p3", "scenario": "render", "args": [["a", "b"], [["1"]], null]},
+    {"id": "p4", "scenario": "render", "args": [["a"], [["1"]], ["middle"]]},
+    {"id": "p5", "scenario": "render", "args": [["a", "b"], [["1", "2"]], ["left"]]},
+    {"id": "p6", "scenario": "render", "args": [["a", "b"], [[null, "x"]], ["left", "center"]]},
+    {"id": "p7", "scenario": "render", "args": [["note"], [["two\nlines"]], ["left"]]},
+    {"id": "p8", "scenario": "alignments", "args": ["lrc"]},
+    {"id": "p9", "scenario": "alignments", "args": ["l,r"]},
+    {"id": "p10", "scenario": "alignments", "args": [" LC "]},
+    {"id": "p11", "scenario": "cli", "args": [["--align", "x"], "a\n1\n"]},
+    {"id": "p12", "scenario": "cli", "args": [[], "a,b\n1,2\n"]},
+    {"id": "p13", "scenario": "render", "args": [["header"], [], null]},
+    {"id": "p14", "scenario": "render", "args": [["wide column", "x"], [["a", "b"]], ["center", "center"]]},
+    {"id": "p15", "scenario": "cli", "args": [[], ""]},
+    {"id": "t1", "scenario": "render", "args": [["Item", "Price"], [["Tea", "3.50"], ["Cake", "12.00"]], ["left", "right"]]},
+    {"id": "t2", "scenario": "render", "args": [["n"], [[1], [22], [333]], ["right"]]},
+    {"id": "t3", "scenario": "render", "args": [["Name", "Qty", "Note"], [["apple", 3, "ok"], ["kiwi", 12, "ripe"]], ["left", "right", "center"]]},
+    {"id": "t4", "scenario": "cli", "args": [["--align", "lr"], "Item,Price\nTea,3.50\n"]},
+    {"id": "t5", "scenario": "render", "args": [["a", "b"], [["x|y", "1"]], ["left", "right"]]}
+  ]
+}

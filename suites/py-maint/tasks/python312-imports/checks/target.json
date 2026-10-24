@@ -1,0 +1,18 @@
+{
+  "t1": {"ok": {"db": {"host": "localhost", "url": "postgres://localhost/app"}}},
+  "t2": {"ok": {"log": {"level": "info", "file": "app.log"}}},
+  "t3": {"ok": ["a", "c"]},
+  "t4": {"ok": true},
+  "t5": {"ok": false},
+  "t6": {"ok": true},
+  "t7": {"ok": true},
+  "t8": {"ok": false},
+  "t9": {"ok": 42},
+  "t10": {"ok": ["plugboard_probe_same", false]},
+  "t11": {"ok": ["a", "c"]},
+  "t12": {"ok": {"a": 10, "c": 6}},
+  "t13": {"ok": "2.3.1"},
+  "t14": {"error": "InterpolationMissingOptionError"},
+  "t15": {"ok": true},
+  "t16": {"ok": ["x"]}
+}

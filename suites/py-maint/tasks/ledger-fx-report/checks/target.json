@@ -1,0 +1,13 @@
+{
+  "t1": {"ok": {"rows": [["Assets:Bank:EUR", "1000.00 EUR", "1000.00 EUR"], ["Assets:Bank:USD", "110.00 USD", "100.00 EUR"]], "total": "1100.00 EUR"}},
+  "t2": {"ok": "Account              Balance       In EUR\n---------------  -----------  -----------\nAssets:Bank:EUR  1000.00 EUR  1000.00 EUR\nAssets:Bank:USD   110.00 USD   100.00 EUR\nTotal                         1100.00 EUR\n"},
+  "t3": {"ok": "0.909091"},
+  "t4": {"ok": "50.00 EUR"},
+  "t5": {"ok": "20.00 USD"},
+  "t6": {"ok": "100.00 GBP"},
+  "t7": {"ok": {"rows": [["Assets:Bank:GBP", "100.00 GBP", "113.64 EUR"], ["Assets:Wallet:JPY", "3000 JPY", "18.18 EUR"], ["Liabilities:Card:EUR", "-55.00 EUR", "-55.00 EUR"]], "total": "76.82 EUR"}},
+  "t8": {"ok": {"rows": [["Assets:Bank:GBP", "100.00 GBP", "125.00 USD"], ["Assets:Wallet:JPY", "3000 JPY", "20.00 USD"], ["Liabilities:Card:EUR", "-55.00 EUR", "-60.50 USD"]], "total": "84.50 USD"}},
+  "t9": {"ok": {"rows": [["Assets:Bank:GBP", "100.00 GBP", "100.00 GBP"], ["Assets:Wallet:JPY", "3000 JPY", "16.00 GBP"], ["Liabilities:Card:EUR", "-55.00 EUR", "-48.40 GBP"]], "total": "67.60 GBP"}},
+  "t10": {"ok": "0.006061"},
+  "t11": {"ok": ["2500.00 EUR", "215.00 EUR", "2285.00 EUR"]}
+}

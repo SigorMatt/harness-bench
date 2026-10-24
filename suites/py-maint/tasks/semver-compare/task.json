@@ -1,0 +1,21 @@
+{
+  "schema": "hb/task/1",
+  "id": "semver-compare",
+  "category": "implement_to_spec",
+  "instruction": "instruction.md",
+  "repo": "repo",
+  "scope": {
+    "allowed_paths": ["semverlite/version.py"],
+    "strict": false
+  },
+  "probe": {
+    "program": "probes/probe.py",
+    "inputs": "probes/inputs.json",
+    "timeout_seconds": 30
+  },
+  "checks": {
+    "target": "checks/target.json",
+    "preservation": "checks/preservation.json",
+    "solution": "checks/solution"
+  }
+}

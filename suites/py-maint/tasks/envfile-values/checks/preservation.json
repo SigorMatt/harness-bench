@@ -1,0 +1,20 @@
+{
+  "p1": {"ok": {"A": "1", "B": "two"}},
+  "p2": {"ok": {"PATH_EXTRA": "/opt/bin"}},
+  "p3": {"ok": {"S": "keep \\n as is"}},
+  "p4": {"ok": {"D": "line1\nline2\t$HOME $X \\q"}},
+  "p5": {"ok": {"V": "value"}},
+  "p6": {"ok": {"V": "a#b"}},
+  "p7": {"ok": {"A": "2"}},
+  "p8": {"ok": {"EMPTY": ""}},
+  "p9": {"ok": 2},
+  "p10": {"ok": 1},
+  "p11": {"ok": 3},
+  "p12": {"error": "EnvFileError"},
+  "p13": {"ok": "A=simple\nB=\"with space\"\nC=\"q\\\"uote\"\nD=\"\\$5\"\n"},
+  "p14": {"ok": {"A": "with space", "B": "tab\there", "C": "new\nline", "D": "back\\slash"}},
+  "p15": {"ok": {"SPACED": "x"}},
+  "p16": {"ok": 1},
+  "p17": {"ok": {"Q": "done", "R": "raw"}},
+  "p18": {"error": "ValueError"}
+}

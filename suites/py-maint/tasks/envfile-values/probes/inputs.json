@@ -1,0 +1,31 @@
+{
+  "cases": [
+    {"id": "p1", "scenario": "parse", "args": ["# comment\n\nA=1\nB = two \n"]},
+    {"id": "p2", "scenario": "parse", "args": ["export PATH_EXTRA=/opt/bin\n"]},
+    {"id": "p3", "scenario": "parse", "args": ["S='keep \\n as is'\n"]},
+    {"id": "p4", "scenario": "parse", "args": ["D=\"line1\\nline2\\t$HOME \\$X \\q\"\n"]},
+    {"id": "p5", "scenario": "parse", "args": ["V=value # trailing comment\n"]},
+    {"id": "p6", "scenario": "parse", "args": ["V=a#b\n"]},
+    {"id": "p7", "scenario": "parse", "args": ["A=1\nA=2\n"]},
+    {"id": "p8", "scenario": "parse", "args": ["EMPTY=\n"]},
+    {"id": "p9", "scenario": "error_line", "args": ["A=1\nnot a pair\n"]},
+    {"id": "p10", "scenario": "error_line", "args": ["1BAD=x\n"]},
+    {"id": "p11", "scenario": "error_line", "args": ["OK=1\n\nU=\"open\n"]},
+    {"id": "p12", "scenario": "parse", "args": ["=value\n"]},
+    {"id": "p13", "scenario": "dumps", "args": [{"A": "simple", "B": "with space", "C": "q\"uote", "D": "$5"}]},
+    {"id": "p14", "scenario": "roundtrip", "args": [{"A": "with space", "B": "tab\there", "C": "new\nline", "D": "back\\slash"}]},
+    {"id": "p15", "scenario": "parse", "args": ["  export   SPACED = x  \n"]},
+    {"id": "p16", "scenario": "error_line", "args": ["Q='it' s\n"]},
+    {"id": "p17", "scenario": "parse", "args": ["Q=\"done\" # why\nR='raw' # note\n"]},
+    {"id": "p18", "scenario": "dumps", "args": [{"bad-key": "x"}]},
+    {"id": "t1", "scenario": "parse", "args": ["DATABASE_URL=postgres://app:secret@db/app?sslmode=require\n"]},
+    {"id": "t2", "scenario": "parse", "args": ["TOKEN=c2VjcmV0==\n"]},
+    {"id": "t3", "scenario": "parse", "args": ["GREETING=\"a=b\"\n"]},
+    {"id": "t4", "scenario": "parse", "args": ["export QUERY='x=1&y=2'\n"]},
+    {"id": "t5", "scenario": "parse", "args": ["A = b = c\n"]},
+    {"id": "t6", "scenario": "parse", "args": ["EQ==\n"]},
+    {"id": "t7", "scenario": "roundtrip", "args": [{"K": "a=b", "L": "plain", "M": "x = y"}]},
+    {"id": "t8", "scenario": "parse", "args": ["MIXED=\"say \\\"x=y\\\"\" # note\nNEXT=1\n"]},
+    {"id": "t9", "scenario": "parse", "args": ["URL=http://h/?a=1 # comment\nB=2\n"]}
+  ]
+}
