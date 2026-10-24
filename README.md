@@ -23,10 +23,11 @@ grades it in a sandbox (`hb/orchestrator.py`), the plan and seal commands
 (`hb/plan.py`, `hb/seal.py`), the release, harness image and task base tooling
 (`hb/release.py`, `hb/harness.py`, `hb/taskbase.py` and their scripts), the
 reference `baseline` harness (`harnesses/baseline`), the image Dockerfiles, a
-generated example run and the workflows. Not yet built: the pin of the first task
-base (`task-base.json`), the image every harness image starts from; the suite
-content (`suites/py-maint/`); the registry (`registry.json`) with the first
-harness images; more harness adapters; and the results site.
+generated example run and the workflows. It also holds the pilot suite,
+`suites/py-maint` 0.1.0: seven tasks, one per category, each checked by
+`scripts/suite.py check`. Not yet built: the registry (`registry.json`) with
+the first harness images, more harness adapters, a full-size suite, and the
+results site.
 
 ## How results stay fair
 
@@ -43,11 +44,13 @@ schemas/                     JSON Schemas (draft 2020-12)
 hb/                          reference library, model gateway, orchestrator and toolkit CLI
 docker/                      toolkit, suite and task base image Dockerfiles
 harnesses/<id>/              harness adapters: harness.json, Dockerfile, config/ (spec §6.4)
+suites/py-maint/             the pilot suite: seven tasks, one per category (spec §7)
 examples/                    a suite with one task, a registry, a task base pin and a generated run
 scripts/make_examples.py     regenerates examples; --check fails if they are stale
 scripts/release.py           release steps: pin the images, verify a release commit, release table entry
 scripts/harness.py           harness image steps: register a built image, verify registry entries
 scripts/task_base.py         task base steps: pin a built image in task-base.json, verify it
+scripts/suite.py             suite steps: check every task against the curation rules (spec §7)
 tests/                       functional tests
 .github/workflows/bench.yml  reusable benchmark workflow (image pins are placeholders on main)
 .github/workflows/release.yml  builds, checks, publishes and attests a release's images
@@ -70,6 +73,7 @@ templates/                   caller workflow for submitters; intake for the resu
 pip install -e ".[dev]"
 python -m pytest -q
 python scripts/make_examples.py --check
+python scripts/suite.py check        # every task of suites/py-maint against the curation rules
 ```
 
 The Docker end-to-end tests are opt-in: `HB_DOCKER_TESTS=1 python -m pytest -q

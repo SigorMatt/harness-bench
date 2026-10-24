@@ -8,6 +8,7 @@
       "config_digest": "sha256:3c5246d6044ff2a30d36e591a2b044229466ea00b0fb3354663c72ac160e597c",
       "entrypoint": ["/hb/entrypoint"],
       "homepage": "https://github.com/SigorMatt/harness-bench",
+      "build_commit": "3b1f0c9e8d7a6b5c4d3e2f1a0b9c8d7e6f5a4b3c",
       "task_base": "ghcr.io/sigormatt/hb-task-base@sha256:5f0c3d1b9e2a7c4f6e8d0b1a3c5e7f9d2b4a6c8e0f1d3b5a7c9e2f4d6b8a0c1e"
     },
     {
@@ -17,6 +18,7 @@
       "config_digest": "sha256:07e76bfcdb31ab4db9ca2c45c02e13a8b59277b7aa2d22fcddfc826d0d6c77cf",
       "entrypoint": ["/hb/entrypoint"],
       "homepage": "https://example.com/example-harness",
+      "build_commit": "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d",
       "task_base": "ghcr.io/sigormatt/hb-task-base@sha256:5f0c3d1b9e2a7c4f6e8d0b1a3c5e7f9d2b4a6c8e0f1d3b5a7c9e2f4d6b8a0c1e"
     }
   ]

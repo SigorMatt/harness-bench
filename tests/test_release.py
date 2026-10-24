@@ -219,8 +219,8 @@ def edit_json(path: Path, change) -> None:
      "runtime.task_base is .* not the task base task-base.json pins"),
     (lambda r: edit_json(r / release.REGISTRY_FILE, lambda d: d["harnesses"][1].update(task_base=OTHER_TASK_BASE)),
      "not built on the pinned task base: example-harness"),
-    (lambda r: edit_json(r / release.REGISTRY_FILE, lambda d: d["harnesses"][0].pop("task_base")),
-     "not built on the pinned task base: baseline"),
+    (lambda r: edit_json(r / release.REGISTRY_FILE, lambda d: d["harnesses"][0].pop("task_base")), "schema"),
+    (lambda r: edit_json(r / release.REGISTRY_FILE, lambda d: d["harnesses"][0].pop("build_commit")), "schema"),
 ])
 def test_inputs_no_run_could_use_are_refused(repo, break_it, message):
     break_it(repo)

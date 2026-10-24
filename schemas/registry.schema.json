@@ -16,7 +16,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["id", "version", "image", "config_digest", "entrypoint", "homepage"],
+        "required": ["id", "version", "image", "config_digest", "entrypoint", "homepage", "build_commit", "task_base"],
         "properties": {
           "id": {
             "$ref": "urn:hb:schema:common:1#/$defs/slug"

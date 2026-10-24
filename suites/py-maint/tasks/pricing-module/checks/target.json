@@ -1,0 +1,19 @@
+{
+  "t1": {"ok": "2.68"},
+  "t2": {"ok": "16.99"},
+  "t3": {"ok": "117.00"},
+  "t4": {"ok": "1299.00"},
+  "t5": {"ok": "shopcart.money"},
+  "t6": {"ok": "shopcart.money"},
+  "t7": {"ok": "shopcart.money"},
+  "t8": {"ok": "shopcart.money"},
+  "t9": {"ok": true},
+  "t10": {"ok": true},
+  "t11": {"ok": true},
+  "t12": {"ok": true},
+  "t13": {"error": "ValueError"},
+  "t14": {"error": "ValueError"},
+  "t15": {"ok": true},
+  "t16": {"ok": "-0.01"},
+  "t17": {"ok": "0.01"}
+}

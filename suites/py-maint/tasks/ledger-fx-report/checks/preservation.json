@@ -1,0 +1,18 @@
+{
+  "p1": {"ok": {"rows": [["Assets:Bank:EUR", "1000.00 EUR", "1100.00 USD"], ["Assets:Bank:USD", "110.00 USD", "110.00 USD"]], "total": "1210.00 USD"}},
+  "p2": {"ok": "Account              Balance       In USD\n---------------  -----------  -----------\nAssets:Bank:EUR  1000.00 EUR  1100.00 USD\nAssets:Bank:USD   110.00 USD   110.00 USD\nTotal                         1210.00 USD\n"},
+  "p3": {"ok": "1.100000"},
+  "p4": {"ok": "1.000000"},
+  "p5": {"error": "MissingRate"},
+  "p6": {"ok": "0.880000"},
+  "p7": {"ok": "2999 JPY"},
+  "p8": {"ok": ["2750.00 USD", "236.50 USD", "2513.50 USD"]},
+  "p9": {"ok": [["2024-03-01", "Client A", "550.00 USD", "550.00 USD"], ["2024-03-05", "Flight", "-220.00 USD", "330.00 USD"]]},
+  "p10": {"ok": {"Assets:Bank:EUR": "1985.00 EUR", "Assets:Bank:USD": "330.00 USD", "Expenses:Food": "15.00 EUR", "Expenses:Travel": "220.00 USD", "Income:Consulting": "-550.00 USD", "Income:Salary": "-2000.00 EUR"}},
+  "p11": {"ok": [["2024-03-02", "BAKERY", [["Assets:Bank:EUR", "-3.20 EUR"], ["Expenses:Unsorted", "3.20 EUR"]]], ["2024-03-04", "Refund", [["Assets:Bank:EUR", "12.00 EUR"], ["Expenses:Unsorted", "-12.00 EUR"]]]]},
+  "p12": {"error": "CurrencyMismatch"},
+  "p13": {"error": "ParseError"},
+  "p14": {"error": "ParseError"},
+  "p15": {"error": "MissingRate"},
+  "p16": {"error": "MissingRate"}
+}

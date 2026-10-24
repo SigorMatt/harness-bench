@@ -1,0 +1,17 @@
+{
+  "p1": {"ok": "| Name  | Role     |\n| :---- | :------- |\n| Ada   | engineer |\n| Grace | admiral  |\n"},
+  "p2": {"ok": "|  c  |\n| :-: |\n| ab  |\n"},
+  "p3": {"error": "ValueError"},
+  "p4": {"error": "ValueError"},
+  "p5": {"error": "ValueError"},
+  "p6": {"ok": "| a   |  b  |\n| :-- | :-: |\n|     |  x  |\n"},
+  "p7": {"ok": "| note      |\n| :-------- |\n| two lines |\n"},
+  "p8": {"ok": ["left", "right", "center"]},
+  "p9": {"error": "ValueError"},
+  "p10": {"ok": ["left", "center"]},
+  "p11": {"ok": [2, ""]},
+  "p12": {"ok": [0, "| a   | b   |\n| :-- | :-- |\n| 1   | 2   |\n"]},
+  "p13": {"ok": "| header |\n| :----- |\n"},
+  "p14": {"ok": "| wide column |  x  |\n| :---------: | :-: |\n|      a      |  b  |\n"},
+  "p15": {"ok": [0, ""]}
+}

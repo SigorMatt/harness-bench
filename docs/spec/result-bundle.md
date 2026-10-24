@@ -885,6 +885,54 @@ Curation rules that follow from this design:
 - Observations must be hard to produce without correct behaviour ("the module
   imported" is not an observation).
 
+`scripts/suite.py check` ([`hb/curate.py`](../../hb/curate.py)) checks every task
+against its schema and against these rules, and a few more:
+
+- `task.json` is the task in its directory, with the suite's category for it;
+  its scope is strict exactly for the restraint category.
+- The target has at least one case, and no case is in both the target and the
+  preservation checks.
+- The probe reports the same observations twice, on the pristine repository and
+  on the reference solution.
+- Pristine fails every target case, not just some of them.
+- The reference solution changes at least one file, only within the allowed
+  paths, and no protected path.
+- Graded by `grade_rep` exactly as a rep is, from its workspace diff, the
+  reference solution resolves the task.
+
+It runs the suite's own probes, so it is for this repository's suites only. By
+default they run on the local `python3`, which may not be the sandbox's Python
+3.12 and may see packages the sandbox lacks (a fix that imports `packaging`
+would pass there and fail in grading), so `check` warns when the version
+differs; with `--toolkit IMAGE` the probes run in the probe sandbox itself, as
+grading runs them. CI runs curation for `suites/py-maint` and the example suite
+([`tests/test_suite.py`](../../tests/test_suite.py)), and the Docker tests run
+it with `--toolkit`. The same tests run each repository's own tests with
+pytest: they pass with the reference solution, and fail without it where the
+task is to fix a failing test, repair a build or implement a stub.
+
+A build_repair task whose pristine repository cannot be imported at all, such
+as `python312-imports`, has no preservation cases: nothing it does can be
+recorded. Its target is then the pristine repository's behaviour on the last
+Python it worked on (3.11), which a test checks where that Python is present.
+
+**The pilot suite.** `suites/py-maint` 0.1.0 has one task per category:
+
+| Task | Category | What it asks |
+|---|---|---|
+| `slugify-accents` | fix_with_failing_test | a slug function that drops accented letters, with the failing test named |
+| `envfile-values` | fix_from_report | a user's bug report: `.env` values containing `=` are cut short |
+| `semver-compare` | implement_to_spec | implement Semantic Versioning precedence for a stub `compare()` |
+| `pricing-module` | preserve_refactor | move money helpers into their own module, keeping the old imports working |
+| `python312-imports` | build_repair | a package that no longer imports on Python 3.12 (`SafeConfigParser`, `distutils`, `imp`) |
+| `ledger-fx-report` | navigate_large_repo | a wrong currency conversion in a report, caused three calls below it in a 33-module package |
+| `table-alignment` | restraint | a one-line padding bug, with the scope strictly limited to one file |
+
+Its repositories use the standard library only, and their tests are written for
+pytest, which the task base provides (§6.5). It is a pilot: enough to run the
+whole chain and see the first numbers, not yet enough tasks to rank harnesses
+with confidence (§10, best-of-N).
+
 ## 8. Acceptance procedure
 
 For a submitted run (repository R, run id N), the aggregator:
@@ -1041,6 +1089,7 @@ cohort.
 | `hb/plan.py` | values derived from the suite: the task matrix and the task job timeout (`plan_run`) |
 | `hb/seal.py` | sealing a run: one verified bundle per task, run identity, re-run limits, the run manifest |
 | `hb/grade.py` | observation comparison, verdict, probe runner contract, `grade_rep` |
+| `hb/curate.py` | curation: the rules every task of a suite must pass before it grades harnesses (`scripts/suite.py`) |
 | `hb/metrics.py` | usage and cost from gateway records |
 | `hb/accept.py` | expected files, attestation commands, run acceptance, attempt rules, dedup key |
 | `hb/harness.py` | harness images: adapters, the registry entry from its build commit, its checks (`scripts/harness.py`, `.github/workflows/harness.yml`) |

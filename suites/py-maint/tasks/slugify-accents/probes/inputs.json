@@ -1,0 +1,26 @@
+{
+  "cases": [
+    {"id": "p1", "scenario": "slugify", "args": ["Hello, World!", {}]},
+    {"id": "p2", "scenario": "slugify", "args": ["  multiple   spaces  ", {}]},
+    {"id": "p3", "scenario": "slugify", "args": ["Python 3.12 release", {}]},
+    {"id": "p4", "scenario": "slugify", "args": ["Release notes 2024", {"separator": "_"}]},
+    {"id": "p5", "scenario": "slugify", "args": ["one two three", {"max_length": 8}]},
+    {"id": "p6", "scenario": "slugify", "args": ["supercalifragilistic", {"max_length": 5}]},
+    {"id": "p7", "scenario": "slugify", "args": ["", {}]},
+    {"id": "p8", "scenario": "slugify", "args": ["!!! ???", {}]},
+    {"id": "p9", "scenario": "slugify", "args": ["a b", {"separator": "x"}]},
+    {"id": "p10", "scenario": "slugify", "args": ["a b", {"max_length": 0}]},
+    {"id": "p11", "scenario": "slugify", "args": ["a b", {"separator": ""}]},
+    {"id": "p12", "scenario": "slugify", "args": ["CamelCase And-Dashes", {"separator": "--"}]},
+    {"id": "p13", "scenario": "slugify", "args": ["日本語 text", {}]},
+    {"id": "t1", "scenario": "slugify", "args": ["Crème Brûlée", {}]},
+    {"id": "t2", "scenario": "slugify", "args": ["Ångström units", {}]},
+    {"id": "t3", "scenario": "slugify", "args": ["naïve café", {}]},
+    {"id": "t4", "scenario": "slugify", "args": ["Zoë's résumé", {}]},
+    {"id": "t5", "scenario": "slugify", "args": ["Élan vital énergie", {"max_length": 10}]},
+    {"id": "t6", "scenario": "slugify", "args": ["Señor Müller", {"separator": "_"}]},
+    {"id": "t7", "scenario": "slugify", "args": ["über", {"max_length": 3}]},
+    {"id": "t8", "scenario": "slugify", "args": ["Dvořák in Brno", {}]},
+    {"id": "t9", "scenario": "slugify", "args": ["Phở Hà Nội", {}]}
+  ]
+}

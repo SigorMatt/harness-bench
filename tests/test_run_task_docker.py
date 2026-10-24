@@ -32,6 +32,7 @@ import shutil
 import socket
 import ssl
 import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -39,6 +40,7 @@ import pytest
 
 from hb import profile
 from hb.dockercli import Clock, Docker
+from hb.grade import compare, parse_observations
 from hb.manifest import extract_bundle, pack_bundle, tree_digest, verify_task_bundle
 from hb.orchestrator import DockerProbeRunner, GatewayFailed, TaskJob, Timing, run_task
 from hb.release import ReleaseError
@@ -458,6 +460,47 @@ def test_probe_sandbox_follows_the_runner_contract(tmp_path, env):
     assert probe("crash.py") == b'{"partial": true}'  # a crash still returns what was written
     assert probe("flood.py") == b""                 # more than a report can be
     assert leftovers("probe-test") == []
+
+
+PY_MAINT = ROOT / "suites" / "py-maint"
+PY_MAINT_TASKS = [entry["id"] for entry in json.loads((PY_MAINT / "suite.json").read_text())["tasks"]]
+
+
+def test_curation_runs_in_the_probe_sandbox_with_toolkit(env):
+    """scripts/suite.py check --toolkit: curation with every probe in the sandbox, as grading runs it."""
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "suite.py"), "check", "--toolkit", env["toolkit"],
+                           str(PY_MAINT)], capture_output=True, text=True, timeout=1200, check=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout.splitlines() == [f"{task_id}: ok" for task_id in PY_MAINT_TASKS]
+    assert "not the sandbox's" not in proc.stderr  # no warning about this machine's Python
+    assert leftovers("curation") == []
+
+
+@pytest.mark.parametrize("task_id", PY_MAINT_TASKS)
+def test_the_pilot_probes_grade_in_the_sandbox_as_curation_does(tmp_path, env, task_id):
+    """Each pilot task's probe in the probe sandbox: on the pristine repository it fails every target
+    check and passes every preservation check; on the reference solution it passes them all."""
+    task_dir = PY_MAINT / "tasks" / task_id
+    task = json.loads((task_dir / "task.json").read_text())
+    target = json.loads((task_dir / task["checks"]["target"]).read_text())
+    preservation = json.loads((task_dir / task["checks"]["preservation"]).read_text())
+    pristine, solved = tmp_path / "pristine", tmp_path / "solved"
+    shutil.copytree(task_dir / task["repo"], pristine)
+    shutil.copytree(pristine, solved)
+    shutil.copytree(task_dir / task["checks"]["solution"], solved, dirs_exist_ok=True)
+    runner = DockerProbeRunner(Docker(), env["toolkit"], profile.probe_names(task_id, 1), tmp_path / "s")
+    probe = task["probe"]
+
+    def observe(tree):
+        raw = runner(task_dir / probe["program"], tree, task_dir / probe["inputs"], probe["timeout_seconds"])
+        return parse_observations(raw)
+
+    before, after = observe(pristine), observe(solved)
+    assert compare(before, target)["passed"] == 0
+    assert compare(before, preservation) == {"passed": len(preservation), "total": len(preservation)}
+    assert compare(after, target) == {"passed": len(target), "total": len(target)}
+    assert compare(after, preservation) == {"passed": len(preservation), "total": len(preservation)}
+    assert leftovers(task_id) == []
 
 
 def suite_image_tree(suite: Path, out: Path) -> Path:

@@ -1,0 +1,15 @@
+{
+  "p1": {"ok": "hello-world"},
+  "p2": {"ok": "multiple-spaces"},
+  "p3": {"ok": "python-3-12-release"},
+  "p4": {"ok": "release_notes_2024"},
+  "p5": {"ok": "one-two"},
+  "p6": {"ok": "super"},
+  "p7": {"ok": ""},
+  "p8": {"ok": ""},
+  "p9": {"error": "ValueError"},
+  "p10": {"error": "ValueError"},
+  "p11": {"error": "ValueError"},
+  "p12": {"ok": "camelcase--and--dashes"},
+  "p13": {"ok": "text"}
+}

@@ -1,0 +1,26 @@
+{
+  "cases": [
+    {"id": "t1", "scenario": "read_config", "args": ["[db]\nhost = localhost\nurl = postgres://%(host)s/app\n"]},
+    {"id": "t2", "scenario": "read_config", "args": ["[DEFAULT]\nlevel = info\n\n[log]\nfile = app.log\n"]},
+    {"id": "t3", "scenario": "enabled", "args": ["[plugin:a]\n[plugin:b]\nenabled = no\n[other]\n[plugin:c]\nenabled = yes\n"]},
+    {"id": "t4", "scenario": "at_least", "args": ["1.10", "1.9"]},
+    {"id": "t5", "scenario": "at_least", "args": ["1.2.3", "1.2.10"]},
+    {"id": "t6", "scenario": "at_least", "args": ["3.0", "2.99.1"]},
+    {"id": "t7", "scenario": "at_least", "args": ["1.0.0", "1.0.0"]},
+    {"id": "t8", "scenario": "at_least", "args": ["0.9", "1.0"]},
+    {"id": "t9", "scenario": "load_value", "args": ["p", "X = 6 * 7\n", "X"]},
+    {"id": "t10", "scenario": "loaded_name", "args": ["plugboard_probe_same", "Y = 1\n"]},
+    {"id": "t11", "scenario": "registry_names", "args": [
+      "[plugin:a]\n[plugin:b]\n[plugin:c]\n",
+      {"a": "REQUIRES = '2.0'\n", "b": "REQUIRES = '2.10'\n", "c": "VALUE = 1\n"},
+      "2.3.1"]},
+    {"id": "t12", "scenario": "registry_call", "args": [
+      "[plugin:a]\n[plugin:b]\n[plugin:c]\n",
+      {"a": "def on_start(x):\n    return x * 2\n", "b": "REQUIRES = '3'\ndef on_start(x):\n    return 0\n", "c": "def on_start(x):\n    return x + 1\ndef helper():\n    return None\n"},
+      "2.3.1", "on_start", [5]]},
+    {"id": "t13", "scenario": "host_version", "args": []},
+    {"id": "t14", "scenario": "read_config", "args": ["[s]\na = %(missing)s\n"]},
+    {"id": "t15", "scenario": "at_least", "args": ["10.0", "9.9"]},
+    {"id": "t16", "scenario": "registry_names", "args": ["[plugin:x]\n", {"x": "REQUIRES = '2.3.1'\n"}, "2.3.1"]}
+  ]
+}
